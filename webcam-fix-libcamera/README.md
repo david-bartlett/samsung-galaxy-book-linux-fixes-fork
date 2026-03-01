@@ -86,14 +86,15 @@ The install script performs these steps:
 1. **Detects distro** (Ubuntu, Fedora, Arch) and hardware (IPU6 Meteor Lake or Raptor Lake)
 2. **Checks kernel version** (6.10+ required for IPU6 ISYS driver)
 3. **Verifies kernel modules** (IVSC, IPU6, OV02C10)
-4. **Loads IVSC modules** and adds them to initramfs (fixes the boot race condition where the OV02C10 sensor probes before IVSC is ready)
-5. **Installs libcamera** (from repos on Fedora/Arch, builds from source on Ubuntu)
-6. **Installs PipeWire libcamera plugin** (rebuilds SPA plugin on Ubuntu if needed)
-7. **Installs sensor tuning file** (`ov02c10.yaml` with color correction matrix)
-8. **Hides raw IPU6 V4L2 nodes** (udev rules + WirePlumber rules to prevent ~48 unusable "ipu6" entries in app camera lists)
-9. **Installs camera relay** (v4l2loopback, GStreamer plugin, on-demand monitor, CLI tool, systray GUI)
-10. **Enables PipeWire camera flag** in Chromium-based browsers (Brave, Chrome, Chromium)
-11. **Restarts PipeWire** and verifies the camera is detected
+4. **Checks sensor probe status** — detects the 26 MHz external clock issue (some Book3/Book4 Ultra with Raptor Lake) and offers to auto-install the [DKMS fix](../ov02c10-26mhz-fix/)
+5. **Loads IVSC modules** and adds them to initramfs (fixes the boot race condition where the OV02C10 sensor probes before IVSC is ready)
+6. **Installs libcamera** (from repos on Fedora/Arch, builds from source on Ubuntu)
+7. **Installs PipeWire libcamera plugin** (rebuilds SPA plugin on Ubuntu if needed)
+8. **Installs sensor tuning file** (`ov02c10.yaml` with color correction matrix)
+9. **Hides raw IPU6 V4L2 nodes** (udev rules + WirePlumber rules to prevent ~48 unusable "ipu6" entries in app camera lists)
+10. **Installs camera relay** (v4l2loopback, GStreamer plugin, on-demand monitor, CLI tool, systray GUI)
+11. **Enables PipeWire camera flag** in Chromium-based browsers (Brave, Chrome, Chromium)
+12. **Restarts PipeWire** and verifies the camera is detected
 
 ---
 
@@ -205,6 +206,13 @@ If missing, verify they're in the initramfs:
 lsinitramfs /boot/initrd.img-$(uname -r) | grep -E "ivsc|mei.vsc"
 # Fedora
 lsinitrd | grep -E "ivsc|mei.vsc"
+```
+
+### "external clock 26000000 is not supported" in dmesg
+
+Some Galaxy Book3/Book4 Ultra models (Raptor Lake) have a 26 MHz external clock instead of the expected 19.2 MHz. The installer detects this automatically and offers to install the [DKMS-patched ov02c10 driver](../ov02c10-26mhz-fix/). If you skipped the prompt during install, run the fix manually:
+```bash
+cd ov02c10-26mhz-fix && sudo ./install.sh
 ```
 
 ### Too many "ipu6" entries in camera list

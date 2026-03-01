@@ -93,7 +93,7 @@ The internal DMIC requires SOF (Sound Open Firmware) with a recent enough firmwa
 
 ### [Webcam Fix — Book3 / Book4](webcam-fix-libcamera/) — IPU6 + libcamera (Recommended)
 
-The built-in webcam uses Intel IPU6 (Meteor Lake or Raptor Lake) with an OmniVision OV02C10 sensor. This fix uses the open-source libcamera Simple pipeline handler with Software ISP, accessed through PipeWire. Includes IVSC module loading, initramfs configuration (eliminating the boot race condition), sensor tuning, WirePlumber rules to hide raw IPU6 nodes, and an on-demand camera relay for non-PipeWire apps (Zoom, OBS, VLC).
+The built-in webcam uses Intel IPU6 (Meteor Lake or Raptor Lake) with an OmniVision OV02C10 sensor. This fix uses the open-source libcamera Simple pipeline handler with Software ISP, accessed through PipeWire. Includes IVSC module loading, initramfs configuration (eliminating the boot race condition), sensor tuning, WirePlumber rules to hide raw IPU6 nodes, and an on-demand camera relay for non-PipeWire apps (Zoom, OBS, VLC). The installer also auto-detects the [26 MHz clock issue](ov02c10-26mhz-fix/) affecting some Raptor Lake models and offers to install the DKMS fix.
 
 - PipeWire-native apps (Firefox, Chromium) access the camera directly — no relay needed
 - Non-PipeWire apps use the on-demand V4L2 relay: near-zero CPU when idle, camera activates only when an app opens the device
