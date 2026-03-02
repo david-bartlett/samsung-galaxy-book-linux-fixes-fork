@@ -181,17 +181,43 @@ git sparse-checkout set \
     "WHENCE"
 
 echo "Fetching firmware files (depth=1 for speed)..."
-git fetch --depth=1 -q origin main
-git checkout -q FETCH_HEAD
+if ! git fetch --depth=1 origin main 2>&1; then
+    echo ""
+    echo "ERROR: git sparse checkout from GitLab failed." >&2
+    echo "       Trying tarball fallback..." >&2
+    echo ""
+    cd "$TMPDIR"
+    rm -rf linux-firmware
+    TARBALL_URL="https://gitlab.com/kernel-firmware/linux-firmware/-/archive/main/linux-firmware-main.tar.gz?path=intel/sof-ipc4&path=intel/sof-ipc4-lib&path=intel/sof-ace-tplg&path=intel/sof&path=intel/sof-tplg"
+    if curl -fsSL "$TARBALL_URL" | tar xz; then
+        # GitLab path-filtered archives extract with a hash suffix
+        EXTRACTED=$(ls -d linux-firmware-main-* 2>/dev/null | head -1)
+        if [ -n "$EXTRACTED" ]; then
+            mv "$EXTRACTED" linux-firmware
+        fi
+    fi
+    cd linux-firmware 2>/dev/null || {
+        echo "ERROR: Both git and tarball download failed." >&2
+        echo "       Check your internet connection and try again." >&2
+        echo "       If the problem persists, file an issue at:" >&2
+        echo "       https://github.com/Andycodeman/samsung-galaxy-book4-linux-fixes/issues" >&2
+        exit 1
+    }
+else
+    git checkout -q FETCH_HEAD
+fi
 
 # Verify we got firmware files
 if [ ! -d "intel/sof-ipc4" ]; then
-    echo "ERROR: Failed to download firmware files." >&2
+    echo "ERROR: Download succeeded but firmware files are missing." >&2
+    echo "       The linux-firmware repository layout may have changed." >&2
+    echo "       Please file an issue at:" >&2
+    echo "       https://github.com/Andycodeman/samsung-galaxy-book4-linux-fixes/issues" >&2
     exit 1
 fi
 
 # Get the firmware version tag if possible
-FW_COMMIT=$(git log -1 --format="%h %s" 2>/dev/null || echo "unknown")
+FW_COMMIT=$(git log -1 --format="%h %s" 2>/dev/null || echo "tarball download")
 echo "Firmware source: ${FW_COMMIT}"
 
 # ─── Backup Existing Firmware ────────────────────────────────────────────────
