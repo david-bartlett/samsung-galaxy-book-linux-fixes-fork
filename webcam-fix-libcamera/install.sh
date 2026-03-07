@@ -28,7 +28,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LIBCAMERA_MIN_VER="0.5.0"
+LIBCAMERA_MIN_VER="0.7.0"
 LIBCAMERA_BUILD_VER="v0.7.0"
 LIBCAMERA_BUILD_DIR="/tmp/libcamera-ipu6-build"
 
@@ -391,8 +391,10 @@ check_libcamera_version() {
     major=$(echo "$ver" | cut -d. -f1)
     minor=$(echo "$ver" | cut -d. -f2)
 
-    # Need >= 0.5 (Ccm algorithm in SoftISP requires 0.5.0+)
-    if [[ "$major" -gt 0 ]] || { [[ "$major" -eq 0 ]] && [[ "$minor" -ge 5 ]]; }; then
+    # Need >= 0.7 (0.5.x detects OV02C10 but fails to stream; 0.7.0 has
+    # proper IPASoft sensor support, Ccm/Awb/Adjust algorithms, and handles
+    # missing selection API gracefully)
+    if [[ "$major" -gt 0 ]] || { [[ "$major" -eq 0 ]] && [[ "$minor" -ge 7 ]]; }; then
         echo "$ver"
         return 0
     fi
@@ -685,9 +687,9 @@ case "$DISTRO" in
         if [[ -n "$SPA_SO" ]]; then
             SPA_LIBCAMERA_VER=$(ldd "$SPA_SO" 2>/dev/null | grep -oP 'libcamera\.so\.\K[0-9]+\.[0-9]+' | head -1 || true)
             SPA_LIBCAMERA_MINOR=$(echo "$SPA_LIBCAMERA_VER" | cut -d. -f2)
-            if [[ -n "$SPA_LIBCAMERA_MINOR" ]] && [[ "$SPA_LIBCAMERA_MINOR" -lt 5 ]] && \
+            if [[ -n "$SPA_LIBCAMERA_MINOR" ]] && [[ "$SPA_LIBCAMERA_MINOR" -lt 7 ]] && \
                [[ -n "$LOCAL_LIBCAMERA" ]]; then
-                echo "  SPA plugin links against libcamera $SPA_LIBCAMERA_VER (need >= 0.5)"
+                echo "  SPA plugin links against libcamera $SPA_LIBCAMERA_VER (need >= 0.7)"
                 rebuild_spa_plugin
             else
                 echo "  ✓ PipeWire libcamera SPA plugin ready"
