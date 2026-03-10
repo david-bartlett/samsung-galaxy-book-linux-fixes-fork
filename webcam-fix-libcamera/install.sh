@@ -213,8 +213,18 @@ if command -v dkms >/dev/null 2>&1 && dkms status ov02c10/1.0 2>/dev/null | grep
 fi
 
 if ! $DKMS_26MHZ_INSTALLED; then
-    # Check dmesg for the 26 MHz clock rejection
+    # Check dmesg for the 26 MHz clock rejection.
+    # On Fedora/newer kernels, unprivileged dmesg may be blocked (dmesg_restrict=1),
+    # so try multiple sources: dmesg, sudo dmesg, journalctl.
+    CLOCK_ERROR_FOUND=false
     if dmesg 2>/dev/null | grep -qi "external clock 26000000 is not supported"; then
+        CLOCK_ERROR_FOUND=true
+    elif sudo dmesg 2>/dev/null | grep -qi "external clock 26000000 is not supported"; then
+        CLOCK_ERROR_FOUND=true
+    elif journalctl -k --no-pager 2>/dev/null | grep -qi "external clock 26000000 is not supported"; then
+        CLOCK_ERROR_FOUND=true
+    fi
+    if $CLOCK_ERROR_FOUND; then
         DKMS_26MHZ_NEEDED=true
         echo "  ⚠ Detected 26 MHz external clock error in dmesg."
         echo "    Your hardware has a 26 MHz clock but the kernel driver only supports 19.2 MHz."
