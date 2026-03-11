@@ -628,15 +628,27 @@ build_libcamera_from_source() {
     done
     if [[ -n "$HELPER_FILE" ]] && ! grep -q "CameraSensorHelperOv02c10" "$HELPER_FILE"; then
         echo "  Patching libcamera with OV02C10 sensor helper..."
-        cat >> "$HELPER_FILE" << 'PATCH_EOF'
+        # In libcamera 0.7.0 the helpers are inside namespace ipa { namespace libcamera { }}.
+        # We must insert before the closing braces, not append after them.
+        # Also, 0.7.0 uses gain_ = AnalogueGainLinear{} instead of gainType_/gainConstants_.
+        if grep -q "namespace ipa" "$HELPER_FILE"; then
+            # v0.7.0+ format: insert before "#endif /* __DOXYGEN__ */" or before
+            # the final namespace closing
+            sed -i '/#endif.*__DOXYGEN__/i\
+class CameraSensorHelperOv02c10 : public CameraSensorHelper\
+{\
+public:\
+\tCameraSensorHelperOv02c10()\
+\t{\
+\t\tgain_ = AnalogueGainLinear{ 1, 0, 0, 16 };\
+\t}\
+};\
+REGISTER_CAMERA_SENSOR_HELPER("ov02c10", CameraSensorHelperOv02c10)\
+' "$HELPER_FILE"
+        else
+            # Pre-0.7.0 format: append to end of file
+            cat >> "$HELPER_FILE" << 'PATCH_EOF'
 
-/*
- * OmniVision OV02C10
- *
- * Analogue gain is linear with register value:
- *   gain = code / 16
- *   code 16 = 1.0x, code 248 = 15.5x
- */
 class CameraSensorHelperOv02c10 : public CameraSensorHelper
 {
 public:
@@ -648,6 +660,7 @@ public:
 };
 REGISTER_CAMERA_SENSOR_HELPER("ov02c10", CameraSensorHelperOv02c10)
 PATCH_EOF
+        fi
         echo "  ✓ OV02C10 sensor helper patched"
     fi
 
