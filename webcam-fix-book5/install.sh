@@ -465,7 +465,7 @@ SIGNEOF
             # instead of the stock kernel module (which has rotation=0).
             # initramfs will be rebuilt once at the end of the script
             NEEDS_INITRAMFS=1
-            echo "  ✓ initramfs update defered until the end of the script"
+            echo "  ✓ initramfs update deferred until the end of the script"
 
         fi
     fi
@@ -771,7 +771,7 @@ if [[ -d "$RELAY_DIR" ]]; then
     if command -v dracut &>/dev/null; then
     	# (initramfs rebuilt once at end of script)
     	NEEDS_INITRAMFS=1
-        echo "  ✓ Initramfs rebuild with Camera Relay config defered until the end of the script"
+        echo "  ✓ Initramfs rebuild with Camera Relay config deferred until the end of the script"
     fi
 
     # Check for stale v4l2loopback with wrong label (e.g. OBS Virtual Camera)
