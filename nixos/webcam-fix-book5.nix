@@ -16,7 +16,7 @@ let
 
     src = visionDriversSrc;
 
-    nativeBuildInputs = kernelPackages.moduleBuildDependencies ++ [ pkgs.gcc pkgs.gnumake ];
+    nativeBuildInputs = [ kernelPackages.kernel.dev pkgs.gcc pkgs.gnumake pkgs.perl ];
 
     buildPhase = ''
       make KERNELRELEASE=${kernelPackages.kernel.modDirVersion} \
@@ -40,7 +40,7 @@ let
 
     src = ../webcam-fix-book5/ipu-bridge-fix;
 
-    nativeBuildInputs = kernelPackages.moduleBuildDependencies ++ [ pkgs.gcc pkgs.gnumake ];
+    nativeBuildInputs = [ kernelPackages.kernel.dev pkgs.gcc pkgs.gnumake pkgs.perl ];
 
     buildPhase = ''
       make KERNELRELEASE=${kernelPackages.kernel.modDirVersion} \
