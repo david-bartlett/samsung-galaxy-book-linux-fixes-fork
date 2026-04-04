@@ -175,6 +175,19 @@ let
   wireplumberUsesConf = lib.versionAtLeast (pkgs.wireplumber.version or "0.5") "0.5";
 in
 {
+  # OV02E10 (Book5) can show purple/green tint when rotated because the
+  # kernel driver may not update Bayer layout metadata after transform.
+  # Patch libcamera Simple pipeline to recompute Bayer order from transform.
+  nixpkgs.overlays = [
+    (final: prev: {
+      libcamera = prev.libcamera.overrideAttrs (old: {
+        patches = (old.patches or [ ]) ++ [
+          ../webcam-fix-book5/libcamera-bayer-fix/bayer-fix-v0.6.patch
+        ];
+      });
+    })
+  ];
+
   boot.initrd.kernelModules = [
     "usb_ljca"
     "gpio_ljca"
