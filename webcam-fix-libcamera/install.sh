@@ -1187,7 +1187,8 @@ if [[ -d "$RELAY_DIR" ]]; then
 
     if [[ -n "$_relay_user" ]]; then
         ICON_DEST="${_relay_home}/.local/share/icons/hicolor/symbolic/apps"
-        sudo -u "$_relay_user" mkdir -p "$ICON_DEST"
+        sudo mkdir -p "$ICON_DEST"
+        sudo chown -R "$_relay_user":"$_relay_user" "${_relay_home}/.local/share/icons"
         for icon in camera-disabled-symbolic camera-switch-symbolic camera-video-symbolic; do
             if [[ -f "$RELAY_DIR/yaru-icons/${icon}.svg" ]]; then
                 sudo -u "$_relay_user" cp "$RELAY_DIR/yaru-icons/${icon}.svg" "$ICON_DEST/"
