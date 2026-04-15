@@ -320,9 +320,42 @@ echo "  ✓ IVSC modules will load automatically at boot"
 echo "  Adding IVSC modules to initramfs..."
 INITRAMFS_CHANGED=false
 
-# Detect initramfs tool by what's actually installed (not distro name).
-# Arch users may use dracut instead of mkinitcpio, etc.
-if command -v update-initramfs &>/dev/null; then
+# Detect initramfs tool. Prefer the distro we already detected over
+# `command -v`, because some Arch-based distros (e.g. CachyOS) ship an
+# `update-initramfs` compat wrapper that shells out to mkinitcpio — which
+# would otherwise hijack the Debian branch and try to write to a
+# /etc/initramfs-tools/ directory that doesn't exist on Arch. See
+# https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/40
+INITRAMFS_TOOL=""
+case "$DISTRO" in
+    arch)
+        if command -v mkinitcpio &>/dev/null; then INITRAMFS_TOOL="mkinitcpio"
+        elif command -v dracut &>/dev/null; then INITRAMFS_TOOL="dracut"
+        fi
+        ;;
+    fedora)
+        if command -v dracut &>/dev/null; then INITRAMFS_TOOL="dracut"
+        elif command -v mkinitcpio &>/dev/null; then INITRAMFS_TOOL="mkinitcpio"
+        fi
+        ;;
+    ubuntu|debian)
+        if command -v update-initramfs &>/dev/null && [[ -d /etc/initramfs-tools ]]; then
+            INITRAMFS_TOOL="update-initramfs"
+        elif command -v dracut &>/dev/null; then INITRAMFS_TOOL="dracut"
+        fi
+        ;;
+esac
+# Fallback for unknown/unset distro: pick by what exists, but still guard
+# the Debian branch on the config directory actually being present.
+if [[ -z "$INITRAMFS_TOOL" ]]; then
+    if command -v update-initramfs &>/dev/null && [[ -d /etc/initramfs-tools ]]; then
+        INITRAMFS_TOOL="update-initramfs"
+    elif command -v dracut &>/dev/null; then INITRAMFS_TOOL="dracut"
+    elif command -v mkinitcpio &>/dev/null; then INITRAMFS_TOOL="mkinitcpio"
+    fi
+fi
+
+if [[ "$INITRAMFS_TOOL" == "update-initramfs" ]]; then
     # Debian/Ubuntu: append modules to /etc/initramfs-tools/modules
     for mod in mei-vsc mei-vsc-hw ivsc-ace ivsc-csi; do
         if ! grep -qxF "$mod" /etc/initramfs-tools/modules 2>/dev/null; then
@@ -336,7 +369,7 @@ if command -v update-initramfs &>/dev/null; then
     else
         echo "  ✓ IVSC modules already in initramfs"
     fi
-elif command -v dracut &>/dev/null; then
+elif [[ "$INITRAMFS_TOOL" == "dracut" ]]; then
     # Fedora/RHEL/Arch-with-dracut: drop-in config
     DRACUT_CONF="/etc/dracut.conf.d/ivsc-camera.conf"
     if [[ ! -f "$DRACUT_CONF" ]]; then
@@ -353,7 +386,7 @@ DRACUT_EOF
     else
         echo "  ✓ IVSC modules already in initramfs (dracut)"
     fi
-elif command -v mkinitcpio &>/dev/null; then
+elif [[ "$INITRAMFS_TOOL" == "mkinitcpio" ]]; then
     # Arch/Arch-based with mkinitcpio
     MKINITCPIO_CONF="/etc/mkinitcpio.conf.d/ivsc-camera.conf"
     sudo mkdir -p /etc/mkinitcpio.conf.d
