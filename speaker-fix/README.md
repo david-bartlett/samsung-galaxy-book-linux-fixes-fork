@@ -1,5 +1,7 @@
 # Samsung Galaxy Book4 — Speaker Fix (MAX98390 HDA Driver)
 
+> **Wrong board?** This fix is for Samsung Galaxy Book4 Pro/Ultra and Book5 Pro models with **MAX98390 I2C smart amps**. If you have a **Galaxy Book3 Pro 14" (NP940XFG-KC1\*, DMI `940XFG`, ALC298 SSID `0x144dc882`)**, your hardware uses ALC298 codec-internal class-D amps with **no MAX98390 chip at all** — this DKMS package will refuse to install on it. Use [`../speaker-fix-940xfg/`](../speaker-fix-940xfg/) instead. Other Book3/Book4/Book5 models continue here.
+
 ## Quick Install
 
 Download and install in one step — no git required:

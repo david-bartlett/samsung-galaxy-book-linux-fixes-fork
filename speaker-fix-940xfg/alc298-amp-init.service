@@ -1,0 +1,14 @@
+[Unit]
+Description=Initialize ALC298 internal speaker amps (Samsung Galaxy Book3 Pro 14" / 940XFG)
+Documentation=https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/44
+After=systemd-modules-load.service sound.target
+Wants=sound.target
+ConditionPathExists=/dev/snd/hwC0D0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/alc298-amp-init.sh
+
+[Install]
+WantedBy=multi-user.target

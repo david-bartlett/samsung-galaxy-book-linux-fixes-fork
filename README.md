@@ -12,13 +12,30 @@ Each fix can be downloaded and installed in a single command — no git required
 
 ### Speaker Fix (no sound from built-in speakers)
 
+> **Two variants — pick the one that matches your model:**
+>
+> - **Book4 / Book5 Pro & Ultra (MAX98390 amps)** — use [`speaker-fix/`](speaker-fix/) (DKMS)
+> - **Book3 Pro 14" (NP940XFG, ALC298 only, no I2C amp chip)** — use [`speaker-fix-940xfg/`](speaker-fix-940xfg/) (userspace, no DKMS)
+>
+> The two are not interchangeable. Each installer hardware-checks before running.
+
 > **Microphone note (Book4 models):** On Galaxy Book4 (Meteor Lake), the built-in DMIC does not work with or without this fix — no mic functionality is lost. On **Galaxy Book5** (Lunar Lake), the speaker fix works and the **built-in mic continues to work** after installation. See [Microphone Status](#microphone-status) for details.
+
+**Book4 / Book5 (MAX98390 DKMS):**
 
 ```bash
 curl -sL https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/archive/refs/heads/main.tar.gz | tar xz && cd samsung-galaxy-book-linux-fixes-main/speaker-fix && sudo ./install.sh && sudo reboot
 ```
 
 To uninstall: `sudo ./uninstall.sh && sudo reboot`
+
+**Book3 Pro 14" (NP940XFG, SSID `0x144dc882` only):**
+
+```bash
+curl -sL https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/archive/refs/heads/main.tar.gz | tar xz && cd samsung-galaxy-book-linux-fixes-main/speaker-fix-940xfg && sudo ./install.sh
+```
+
+No reboot required — the installer activates the speakers immediately. To uninstall: `sudo ./uninstall.sh`. See [`speaker-fix-940xfg/`](speaker-fix-940xfg/) for details on why this model needs a different fix.
 
 ### Mic Fix (internal microphone not working) — Galaxy Book4 / Book5
 
@@ -78,6 +95,22 @@ The internal speakers use 4x Maxim MAX98390 I2C amplifiers that have no kernel d
 > **Secure Boot:** Most laptops have Secure Boot enabled. If you've never installed a DKMS/out-of-tree kernel module before, you'll need to do a **one-time MOK key enrollment** (reboot + blue screen + password) before the modules will load. See the [full walkthrough](speaker-fix/README.md#secure-boot-setup).
 
 > **Fedora / DNF-based distros:** The install script auto-detects Fedora and configures DKMS module signing using the akmods MOK key (`/etc/pki/akmods/`). If no key exists, it generates one with `kmodgenca` and prompts for enrollment. If modules still won't load after enrollment, check the [Secure Boot signing troubleshooting](speaker-fix/README.md#troubleshooting). Confirmed working on Fedora 43, kernel 6.18.9 (Galaxy Book4 Ultra).
+
+### [Speaker Fix — Book3 Pro 14"](speaker-fix-940xfg/) — ALC298 Codec-Internal Amps (Userspace)
+
+The **Samsung Galaxy Book3 Pro 14"** (NP940XFG-KC1*, DMI `940XFG`, ALC298 subsystem `0x144dc882`) is a different hardware design from the Book4/Book5 — there is **no MAX98390** and no I2C smart amp at all. The four speakers are driven directly from the ALC298 codec's built-in class-D amplifiers, controlled via Realtek COEF registers. The fix above (DKMS MAX98390 driver) doesn't apply and won't install on this board.
+
+This fix initializes the four codec-internal amps (NIDs `0x38`, `0x39`, `0x3C`, `0x3D`) using the same V2_4 layout the 16" sibling (NP964XFG) uses upstream, **plus a SKU-specific `{0x239e, 0x0004}` enable write** that mainline V2_4 omits — that single missing write is the reason the existing `model=alc298-samsung-amp-v2-4-amps` kernel parameter is silent on this board.
+
+- **Pure userspace** — uses `hda-verb` (from `alsa-tools`), no kernel module, no DKMS, no kernel rebuild
+- Survives every kernel update with zero impact
+- One systemd unit at boot + one `system-sleep` hook for resume from suspend
+- DMI guard refuses to run on anything other than DMI `940XFG` + codec SSID `0x144dc882`
+- Installer activates speakers immediately — no reboot required
+
+> **Tradeoff:** This fix keeps the codec-internal amps continuously enabled rather than toggling them on PCM open/close (which would require a kernel fixup). Continuous power impact is roughly 40–100 mW — measurable but small, a few percent of battery per day at idle. An upstream patch is planned for submission to alsa-devel; users on a kernel that includes it can uninstall this workaround and get proper on-demand power management.
+
+> See issue [#44](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/44) for the full diagnostic trail (V2_2/V2_4 testing, RtHDDump captures, COEF sequence derivation). Same fix should drop in for [`joshuagrisham/samsung-galaxybook-extras#97`](https://github.com/joshuagrisham/samsung-galaxybook-extras/issues/97) (parallel report, identical SSID).
 
 ### [Mic Fix](mic-fix/) — SOF Firmware Update (Internal Microphone)
 
@@ -149,6 +182,7 @@ The Galaxy Book4/5 laptops have built-in dual array digital microphones (DMIC). 
 - **Samsung Galaxy Book4 Pro 360 (960QGK)** — Ubuntu 24.04.2, kernel 6.17.0-19-generic, webcam fix confirmed (community-confirmed, [#18](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/18))
 - **Samsung Galaxy Book5 Pro 360 (960QHA)** — Arch Linux, kernel 6.19.9, webcam fix confirmed (community-confirmed, [#22](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/22))
 - **Samsung Galaxy Book3 Pro 360 (960QFG)** — Ubuntu 24.04, webcam rotation fix confirmed (community-confirmed, [#17](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/17))
+- **Samsung Galaxy Book3 Pro 14" (NP940XFG-KC1US)** — Ubuntu 26.04, kernel 7.0.0-14-generic, [`speaker-fix-940xfg/`](speaker-fix-940xfg/) confirmed full stereo from internal speakers (community-confirmed, [#44](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/44))
 
 The upstream speaker PR (#5616) was also confirmed working on Galaxy Book4 Pro, Pro 360, and Book4 Pro 16-inch by other users, so this fix should work on those models too. If you try it on another model or distro, please report back.
 
@@ -165,6 +199,17 @@ The upstream speaker PR (#5616) was also confirmed working on Galaxy Book4 Pro, 
 | Camera ISP | Intel IPU6 Meteor Lake (`8086:7d19`) |
 | Camera Sensor | OmniVision OV02C10 (`OVTI02C1`) |
 | Microphones | Dual array DMIC (digital — status varies by model, see [Microphone Status](#microphone-status)) |
+
+**Galaxy Book3 Pro 14" (NP940XFG, Raptor Lake)** — different audio architecture from the rest of the lineup
+
+| Component | Details |
+|---|---|
+| Audio Codec | Realtek ALC298 (subsystem `0x144dc882`) |
+| Speaker Amps | **Codec-internal class-D** at NIDs `0x38`/`0x39`/`0x3C`/`0x3D` — no MAX98390, no I2C amp chip |
+| Speakers | 4 transducers (2 woofers + 2 tweeters), driven via Realtek COEF init |
+| Camera ISP | Intel IPU6 Meteor Lake (`8086:7d19`) — same as Book3/Book4 |
+| Camera Sensor | OmniVision OV02C10 (`OVTI02C1`) |
+| Speaker fix to use | [`speaker-fix-940xfg/`](speaker-fix-940xfg/) (NOT the MAX98390 DKMS) |
 
 **Galaxy Book5 (Lunar Lake)**
 
@@ -211,4 +256,4 @@ If you run into problems, please [open an issue](https://github.com/Andycodeman/
 
 ---
 
-*Last updated: 2026-03-31*
+*Last updated: 2026-04-26*
