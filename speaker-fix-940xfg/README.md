@@ -3,6 +3,22 @@
 Restores internal speaker output on the **Samsung Galaxy Book3 Pro 14"**
 (NP940XFG-KC1*, ALC298, subsystem ID `0x144dc882`).
 
+## Quick Install
+
+Download and install in one step — no git required, no reboot needed:
+
+```bash
+curl -sL https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/archive/refs/heads/main.tar.gz | tar xz && cd samsung-galaxy-book-linux-fixes-main/speaker-fix-940xfg && sudo ./install.sh
+```
+
+**Already cloned?** `sudo ./install.sh`
+
+To uninstall: `sudo ./uninstall.sh`
+
+> **Wrong board?** This fix is specifically for the **14" Book3 Pro (NP940XFG, DMI `940XFG`, ALC298 SSID `0x144dc882`)**. The installer DMI-checks before running and refuses on anything else. If you have a Book4 Pro/Ultra or Book5 Pro (MAX98390 amps), use [`../speaker-fix/`](../speaker-fix/) instead. The 16" Book3 Pro (NP964XFG) already works upstream via `V2_4_AMPS` and needs no fix.
+
+---
+
 ## What this fixes
 
 Out of the box on Linux, the internal speakers on this laptop are silent.
