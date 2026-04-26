@@ -229,6 +229,7 @@ Thanks to the following users for their contributions and testing:
 - **[@jn-simonnet](https://github.com/jn-simonnet)** and **[@david-bartlett](https://github.com/david-bartlett)** — Extensive testing across multiple Galaxy Book models, kernels, and distros that helped identify and resolve numerous issues
 - **[@MatiDegli](https://github.com/MatiDegli)** — Created [speaker-on/off/status helper scripts](https://github.com/Andycodeman/samsung-galaxy-book4-linux-fixes/discussions/4) for manually toggling the speaker fix on and off. Note: the driver already powers down the amps when idle, so this isn't needed for battery savings, but may be useful if you want to explicitly unload the modules. Community-contributed and not officially tested — use at your own discretion.
 - **[@pagliarinilucas](https://github.com/pagliarinilucas)** — NixOS module for the speaker fix (declarative kernel module build + I2C device setup). See [`nixos/`](nixos/).
+- **[@derwismtz](https://github.com/derwismtz)** — Tireless testing and Windows trace work that made the Book3 Pro 14" (NP940XFG) speaker fix possible. See [`speaker-fix-940xfg/`](speaker-fix-940xfg/) and [#44](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/44).
 
 ## Credits
 
