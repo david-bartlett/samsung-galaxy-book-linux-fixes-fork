@@ -218,6 +218,53 @@ in
         patches = (old.patches or [ ]) ++ [
           ../webcam-fix-book5/libcamera-bayer-fix/bayer-fix-v0.6.patch
         ];
+        postPatch = (old.postPatch or "") + ''
+          # libcamera 0.7.0 does NOT register CameraSensorHelper for OV02C10
+          # or OV02E10. Without these helpers, IPASoft's auto-exposure falls
+          # back to a generic linear-gain default that fails on these
+          # sensors — apps connect but get no usable frames (or a dim,
+          # washed-out image). The bash installer's
+          # build-patched-libcamera.sh adds them via sed; we mirror that
+          # here as a postPatch so the helpers land in the libcamera
+          # derivation. Both sensors share the same gain model as OV02C10
+          # (gain = value/16), confirmed by the OV02E10 datasheet.
+          HELPER_FILE=""
+          for candidate in src/ipa/libipa/camera_sensor_helper.cpp \
+                           src/libcamera/sensor/camera_sensor_helper.cpp; do
+            if [ -f "$candidate" ]; then
+              HELPER_FILE="$candidate"
+              break
+            fi
+          done
+          if [ -n "$HELPER_FILE" ]; then
+            if ! grep -q 'CameraSensorHelperOv02c10' "$HELPER_FILE"; then
+              sed -i '/#endif.*__DOXYGEN__/i\
+          class CameraSensorHelperOv02c10 : public CameraSensorHelper\
+          {\
+          public:\
+          \tCameraSensorHelperOv02c10()\
+          \t{\
+          \t\tgain_ = AnalogueGainLinear{ 1, 0, 0, 16 };\
+          \t}\
+          };\
+          REGISTER_CAMERA_SENSOR_HELPER("ov02c10", CameraSensorHelperOv02c10)\
+          ' "$HELPER_FILE"
+            fi
+            if ! grep -q 'CameraSensorHelperOv02e10' "$HELPER_FILE"; then
+              sed -i '/#endif.*__DOXYGEN__/i\
+          class CameraSensorHelperOv02e10 : public CameraSensorHelper\
+          {\
+          public:\
+          \tCameraSensorHelperOv02e10()\
+          \t{\
+          \t\tgain_ = AnalogueGainLinear{ 1, 0, 0, 16 };\
+          \t}\
+          };\
+          REGISTER_CAMERA_SENSOR_HELPER("ov02e10", CameraSensorHelperOv02e10)\
+          ' "$HELPER_FILE"
+            fi
+          fi
+        '';
         postInstall = (old.postInstall or "") + ''
           install -Dm644 ${../webcam-fix-book5/ov02c10.yaml} \
             $out/share/libcamera/ipa/simple/ov02c10.yaml
