@@ -25,3 +25,7 @@ launch.sh
 # Compiled binaries (built from source during install)
 camera-relay/camera-relay-monitor
 *.so
+# OctoAlly context files
+.octoally-pro/
+# OctoAlly-generated agents manifest
+AGENTS.md
