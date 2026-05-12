@@ -29,6 +29,27 @@ set -e
 
 NEEDS_INITRAMFS=0  # set to 1 by any section that modifies initramfs-relevant state
 
+# --force-libcamera-rebuild: build the patched libcamera into /usr/local even if
+# the distro package looks "good enough". Needed when the packaged libcamera has
+# the OV02C10 sensor-helper symbols compiled in but the factory registration is
+# dead-code-eliminated at link time (observed on Arch/CachyOS) — in that case
+# check_sensor_helper() greps the symbol, sees it, and wrongly skips the source
+# build, leaving the software AGC with no working helper -> black frames.
+FORCE_LIBCAMERA_REBUILD=false
+for arg in "$@"; do
+    case "$arg" in
+        --force-libcamera-rebuild) FORCE_LIBCAMERA_REBUILD=true ;;
+        -h|--help)
+            echo "Usage: $0 [--force-libcamera-rebuild]"
+            echo "  --force-libcamera-rebuild  Always build the patched libcamera from source"
+            echo "                             (use if your packaged libcamera's OV02C10 helper"
+            echo "                             doesn't register at runtime, e.g. Arch/CachyOS)"
+            exit 0
+            ;;
+        *) echo "WARNING: unknown argument '$arg' (ignored)" ;;
+    esac
+done
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIBCAMERA_MIN_VER="0.7.0"
 LIBCAMERA_BUILD_VER="v0.7.0"
@@ -751,6 +772,11 @@ check_sensor_helper() {
     return 1
 }
 
+if $FORCE_LIBCAMERA_REBUILD; then
+    echo "  ⚠ --force-libcamera-rebuild: building patched libcamera from source regardless of packaged version"
+    LIBCAMERA_OK=false
+fi
+
 if $LIBCAMERA_OK; then
     if ! check_sensor_helper 2>/dev/null; then
         echo "  ⚠ libcamera $LIBCAMERA_VER lacks OV02C10 sensor helper — source build needed for proper exposure"
@@ -855,10 +881,10 @@ case "$DISTRO" in
             sudo dnf install -y libcamera libcamera-gstreamer libcamera-ipa \
                 pipewire-plugin-libcamera 2>/dev/null || true
             LIBCAMERA_VER=$(check_libcamera_version || true)
-            if check_libcamera_version >/dev/null 2>&1 && check_sensor_helper 2>/dev/null; then
+            if ! $FORCE_LIBCAMERA_REBUILD && check_libcamera_version >/dev/null 2>&1 && check_sensor_helper 2>/dev/null; then
                 echo "  ✓ libcamera $LIBCAMERA_VER installed from repos with OV02C10 helper"
             else
-                echo "  Fedora repo version ($LIBCAMERA_VER) lacks OV02C10 helper. Building from source..."
+                echo "  Building patched libcamera from source (repo version: ${LIBCAMERA_VER:-none})..."
                 build_libcamera_from_source
             fi
         fi
@@ -869,12 +895,12 @@ case "$DISTRO" in
             cleanup_stale_local_libcamera
         else
             echo "  Installing libcamera from Arch repos..."
-            sudo pacman -S --needed --noconfirm libcamera gst-plugin-libcamera 2>/dev/null || true
+            sudo pacman -S --needed --noconfirm libcamera gst-plugin-libcamera libcamera-tools 2>/dev/null || true
             LIBCAMERA_VER=$(check_libcamera_version || true)
-            if check_libcamera_version >/dev/null 2>&1 && check_sensor_helper 2>/dev/null; then
+            if ! $FORCE_LIBCAMERA_REBUILD && check_libcamera_version >/dev/null 2>&1 && check_sensor_helper 2>/dev/null; then
                 echo "  ✓ libcamera $LIBCAMERA_VER installed from repos with OV02C10 helper"
             else
-                echo "  Arch repo version ($LIBCAMERA_VER) lacks OV02C10 helper. Building from source..."
+                echo "  Building patched libcamera from source (repo version: ${LIBCAMERA_VER:-none})..."
                 build_libcamera_from_source
             fi
         fi
