@@ -36,14 +36,22 @@ NEEDS_INITRAMFS=0  # set to 1 by any section that modifies initramfs-relevant st
 # check_sensor_helper() greps the symbol, sees it, and wrongly skips the source
 # build, leaving the software AGC with no working helper -> black frames.
 FORCE_LIBCAMERA_REBUILD=false
+# --skip-module-check: don't abort if the IVSC/IPU6 kernel modules can't be
+# found by name. Some kernels build the IVSC bridge in (so there is no .ko) or
+# ship it under a consolidated module name; the in-tree detection below already
+# handles the common cases, but this flag is the escape hatch when it doesn't.
+SKIP_MODULE_CHECK=false
 for arg in "$@"; do
     case "$arg" in
         --force-libcamera-rebuild) FORCE_LIBCAMERA_REBUILD=true ;;
+        --skip-module-check) SKIP_MODULE_CHECK=true ;;
         -h|--help)
-            echo "Usage: $0 [--force-libcamera-rebuild]"
+            echo "Usage: $0 [--force-libcamera-rebuild] [--skip-module-check]"
             echo "  --force-libcamera-rebuild  Always build the patched libcamera from source"
             echo "                             (use if your packaged libcamera's OV02C10 helper"
             echo "                             doesn't register at runtime, e.g. Arch/CachyOS)"
+            echo "  --skip-module-check        Continue even if the IVSC/IPU6 kernel modules"
+            echo "                             can't be found by name (built-in or renamed)"
             exit 0
             ;;
         *) echo "WARNING: unknown argument '$arg' (ignored)" ;;
@@ -186,34 +194,74 @@ echo "  ✓ Kernel $KERNEL_VER (>= 6.10 required)"
 # ──────────────────────────────────────────────
 echo ""
 echo "[5/14] Checking kernel modules..."
+
+# A module counts as "available" if any of these are true:
+#   - it's already loaded (or built in)            -> /sys/module/<name> exists
+#   - it's compiled into the kernel                -> listed in modules.builtin
+#   - it's installed as a loadable module          -> modinfo finds it
+# modinfo handles compression (.ko.zst/.xz/.gz), module signing, dash vs.
+# underscore spelling and non-standard install paths — all of which the old
+# `find ... -name '*.ko*'` heuristic got wrong, producing false negatives on
+# kernels that ship the IVSC bridge built-in (e.g. Fedora 44 / kernel 7.x).
+# See https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/51
+module_available() {
+    local m="$1"
+    local mu="${m//-/_}"
+    [[ -d "/sys/module/$mu" ]] && return 0
+    local builtin_list="/lib/modules/$(uname -r)/modules.builtin"
+    if [[ -r "$builtin_list" ]] && grep -qE "/(${m}|${mu})\.ko\$" "$builtin_list"; then
+        return 0
+    fi
+    if modinfo "$m" &>/dev/null || modinfo "$mu" &>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
 MISSING_MODS=()
 for mod in mei-vsc mei-vsc-hw ivsc-ace ivsc-csi intel-ipu6 intel-ipu6-isys ov02c10; do
-    modpath=$(find /lib/modules/$(uname -r) -name "${mod//-/_}.ko*" -o -name "${mod}.ko*" 2>/dev/null | head -1)
-    if [[ -z "$modpath" ]]; then
-        modpath=$(find /lib/modules/$(uname -r) -name "$(echo $mod | tr '-' '_').ko*" 2>/dev/null | head -1)
-    fi
-    if [[ -z "$modpath" ]]; then
-        MISSING_MODS+=("$mod")
-    fi
+    module_available "$mod" || MISSING_MODS+=("$mod")
 done
 
 if [[ ${#MISSING_MODS[@]} -gt 0 ]]; then
-    echo "ERROR: Missing kernel modules: ${MISSING_MODS[*]}"
+    echo "WARNING: These kernel modules couldn't be found for kernel $(uname -r):"
+    echo "         ${MISSING_MODS[*]}"
+    echo ""
+    echo "  Most likely either your kernel package doesn't ship them, or this"
+    echo "  kernel builds the IVSC bridge in / under a different module name."
     case "$DISTRO" in
         ubuntu|debian)
-            echo "       Try: sudo apt install linux-modules-ipu6-generic-hwe-24.04"
+            echo "  Try: sudo apt install linux-modules-ipu6-generic-hwe-24.04   # (match your HWE variant)"
             ;;
         fedora)
-            echo "       Try: sudo dnf install kernel-modules-extra"
+            echo "  Try: sudo dnf install kernel-modules-extra kernel-modules"
+            echo "  If dnf says 'nothing to do', the drivers are probably built in or"
+            echo "  shipped under a different name. Confirm with:"
+            echo "      find /lib/modules/\$(uname -r) -iname '*vsc*'"
+            echo "      modinfo mei_vsc ivsc_csi ivsc_ace 2>&1 | head"
+            echo "      grep -i vsc /lib/modules/\$(uname -r)/modules.builtin"
             ;;
         arch)
-            echo "       These modules should be in the default kernel."
-            echo "       Try: sudo pacman -S linux-headers"
+            echo "  These modules ship with the linux package. Try: sudo pacman -S linux linux-headers"
             ;;
     esac
-    exit 1
+    echo ""
+    if [[ "$SKIP_MODULE_CHECK" == true ]]; then
+        echo "  --skip-module-check given — continuing anyway."
+    elif [[ -t 0 ]]; then
+        read -rp "  Continue the install anyway? [y/N] " REPLY_MODS
+        REPLY_MODS=${REPLY_MODS:-N}
+        if [[ ! "$REPLY_MODS" =~ ^[Yy] ]]; then
+            echo "  Aborting. Re-run with --skip-module-check to bypass this check."
+            exit 1
+        fi
+    else
+        echo "  Aborting (no interactive terminal). Re-run with --skip-module-check to bypass."
+        exit 1
+    fi
+else
+    echo "  ✓ All required kernel modules found"
 fi
-echo "  ✓ All required kernel modules found"
 
 # ──────────────────────────────────────────────
 # [6/14] Check OV02C10 sensor probe (26 MHz clock fix)
@@ -318,11 +366,15 @@ fi
 echo ""
 echo "[7/14] Loading IVSC kernel modules..."
 for mod in mei-vsc mei-vsc-hw ivsc-ace ivsc-csi; do
-    if ! lsmod | grep -q "$(echo $mod | tr '-' '_')"; then
-        sudo modprobe "$mod"
+    mod_u="${mod//-/_}"
+    if lsmod | grep -q "^${mod_u} " || [[ -d "/sys/module/$mod_u" ]]; then
+        echo "  Already loaded: $mod"
+    elif sudo modprobe "$mod" 2>/dev/null; then
         echo "  Loaded: $mod"
     else
-        echo "  Already loaded: $mod"
+        echo "  Note: '$mod' isn't loadable as a module (built into the kernel, or"
+        echo "        not provided) — skipping. If the camera works after reboot this"
+        echo "        is fine; if not, see issue #51."
     fi
 done
 

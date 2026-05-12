@@ -232,6 +232,25 @@ lsinitramfs /boot/initrd.img-$(uname -r) | grep -E "ivsc|mei.vsc"
 lsinitrd | grep -E "ivsc|mei.vsc"
 ```
 
+### Installer says "kernel modules couldn't be found" (`mei-vsc`, `ivsc-csi`, …)
+
+On most systems the IVSC bridge is shipped as loadable modules (`mei-vsc`,
+`mei-vsc-hw`, `ivsc-ace`, `ivsc-csi`). On Ubuntu install
+`linux-modules-ipu6-generic-hwe-24.04` (match your HWE variant); on Fedora
+`sudo dnf install kernel-modules-extra kernel-modules`.
+
+Some recent kernels (e.g. Fedora kernel 7.x) build the IVSC bridge **into the
+kernel** or ship it under a consolidated module name, so there is no `.ko` file
+to find — the installer now treats a module as present if it's built-in or
+discoverable via `modinfo`. If you still hit the warning and the camera works
+after a reboot, it's harmless; you can also re-run with `--skip-module-check`.
+To check what your kernel actually provides:
+```bash
+find /lib/modules/$(uname -r) -iname '*vsc*'
+modinfo mei_vsc ivsc_csi ivsc_ace 2>&1 | head
+grep -i vsc /lib/modules/$(uname -r)/modules.builtin
+```
+
 ### "external clock 26000000 is not supported" in dmesg
 
 Some Galaxy Book3/Book4 Ultra models (Raptor Lake) have a 26 MHz external clock instead of the expected 19.2 MHz. The installer detects this automatically and offers to install the [DKMS-patched ov02c10 driver](../ov02c10-26mhz-fix/). If you skipped the prompt during install, run the fix manually:
