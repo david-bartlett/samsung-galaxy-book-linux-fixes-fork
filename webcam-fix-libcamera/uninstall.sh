@@ -132,7 +132,12 @@ echo "  ✓ Sensor tuning files removed"
 # [7/8] Remove environment configs
 echo "[7/8] Removing environment configuration..."
 sudo rm -f /etc/profile.d/libcamera-ipa.sh
+sudo rm -f /etc/profile.d/libcamera-gst.sh
 sudo rm -f /etc/environment.d/libcamera-ipa.conf
+if [[ -f /etc/ld.so.conf.d/libcamera-local.conf ]]; then
+    sudo rm -f /etc/ld.so.conf.d/libcamera-local.conf
+    sudo ldconfig
+fi
 echo "  ✓ Environment configuration removed"
 
 # [8/8] Restart PipeWire

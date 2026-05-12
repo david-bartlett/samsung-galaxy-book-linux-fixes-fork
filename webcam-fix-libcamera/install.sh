@@ -774,14 +774,17 @@ PATCH_EOF
     ninja -C build -j$(nproc)
     sudo ninja -C build install
 
-    # Ensure /usr/local/lib64 (Fedora) and /usr/local/lib (Ubuntu) are in the
-    # dynamic linker search path. Without this, 'cam' and gstreamer plugins
-    # fail with "cannot open shared object file" on Fedora where /usr/local/lib64
-    # is not in the default search path.
-    if [[ ! -f /etc/ld.so.conf.d/libcamera-local.conf ]]; then
-        echo "/usr/local/lib64" | sudo tee /etc/ld.so.conf.d/libcamera-local.conf > /dev/null
-        echo "/usr/local/lib/x86_64-linux-gnu" | sudo tee -a /etc/ld.so.conf.d/libcamera-local.conf > /dev/null
-    fi
+    # Ensure the source-built libcamera is in the dynamic linker search path.
+    # meson's libdir under /usr/local differs by distro: Ubuntu/Debian use
+    # lib/<triplet>, Fedora uses lib64, Arch uses plain lib. List all of them
+    # so 'cam', the gstreamer plugin and PipeWire load the build we just made
+    # instead of the (possibly unpatched) distro libcamera. (issue #52)
+    sudo tee /etc/ld.so.conf.d/libcamera-local.conf > /dev/null << 'EOF'
+/usr/local/lib
+/usr/local/lib64
+/usr/local/lib/x86_64-linux-gnu
+/usr/local/lib/aarch64-linux-gnu
+EOF
     sudo ldconfig
 
     cd "$SCRIPT_DIR"
@@ -1177,28 +1180,41 @@ for dir in /usr/local/share/libcamera/ipa/simple /usr/share/libcamera/ipa/simple
     fi
 done
 
-# Set IPA module search path for source-built libcamera
-if [[ -d /usr/local/lib/x86_64-linux-gnu/libcamera ]]; then
-    sudo tee /etc/profile.d/libcamera-ipa.sh > /dev/null << 'EOF'
-# libcamera IPA module path for source-built libcamera
-export LIBCAMERA_IPA_MODULE_PATH=/usr/local/lib/x86_64-linux-gnu/libcamera
-EOF
+# Point apps at the source-built libcamera. meson's libdir under /usr/local is
+# lib/<triplet> on Ubuntu/Debian, lib64 on Fedora and plain lib on Arch — detect
+# whichever one actually received the IPA modules instead of hardcoding the
+# Ubuntu path, otherwise the source build is ignored on Arch/Fedora and apps
+# silently fall back to the (possibly unpatched) distro libcamera. (issue #52)
+LOCAL_IPA_DIR=""
+for d in /usr/local/lib/x86_64-linux-gnu/libcamera /usr/local/lib/aarch64-linux-gnu/libcamera \
+         /usr/local/lib64/libcamera /usr/local/lib/libcamera; do
+    if [[ -d "$d" ]] && ls "$d"/ipa_*.so >/dev/null 2>&1; then
+        LOCAL_IPA_DIR="$d"
+        break
+    fi
+done
+if [[ -n "$LOCAL_IPA_DIR" ]]; then
+    LOCAL_GST_DIR="$(dirname "$LOCAL_IPA_DIR")/gstreamer-1.0"
     sudo mkdir -p /etc/environment.d
-    echo "LIBCAMERA_IPA_MODULE_PATH=/usr/local/lib/x86_64-linux-gnu/libcamera" | \
+    {
+        echo "# libcamera IPA module path for source-built libcamera"
+        echo "export LIBCAMERA_IPA_MODULE_PATH=$LOCAL_IPA_DIR"
+    } | sudo tee /etc/profile.d/libcamera-ipa.sh > /dev/null
+    echo "LIBCAMERA_IPA_MODULE_PATH=$LOCAL_IPA_DIR" | \
         sudo tee /etc/environment.d/libcamera-ipa.conf > /dev/null
     # Set GST_PLUGIN_PATH so gst-launch/gst-inspect find libcamerasrc from any terminal
-    if [[ -d /usr/local/lib/x86_64-linux-gnu/gstreamer-1.0 ]]; then
-        echo "GST_PLUGIN_PATH=/usr/local/lib/x86_64-linux-gnu/gstreamer-1.0" | \
+    if [[ -d "$LOCAL_GST_DIR" ]]; then
+        echo "GST_PLUGIN_PATH=$LOCAL_GST_DIR" | \
             sudo tee -a /etc/environment.d/libcamera-ipa.conf > /dev/null
-        cat << 'GSTEOF' | sudo tee /etc/profile.d/libcamera-gst.sh > /dev/null
-# GStreamer plugin path for source-built libcamera
-export GST_PLUGIN_PATH=/usr/local/lib/x86_64-linux-gnu/gstreamer-1.0
-GSTEOF
-        echo "  ✓ IPA module path and GStreamer plugin path configured"
+        {
+            echo "# GStreamer plugin path for source-built libcamera"
+            echo "export GST_PLUGIN_PATH=$LOCAL_GST_DIR"
+        } | sudo tee /etc/profile.d/libcamera-gst.sh > /dev/null
+        echo "  ✓ IPA module path ($LOCAL_IPA_DIR) and GStreamer plugin path configured"
     else
-        echo "  ✓ IPA module path configured"
+        echo "  ✓ IPA module path ($LOCAL_IPA_DIR) configured"
     fi
-    export LIBCAMERA_IPA_MODULE_PATH=/usr/local/lib/x86_64-linux-gnu/libcamera
+    export LIBCAMERA_IPA_MODULE_PATH="$LOCAL_IPA_DIR"
 fi
 
 # Ensure user is in video group (needed for non-root camera access)
