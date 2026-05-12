@@ -772,6 +772,21 @@ check_sensor_helper() {
     return 1
 }
 
+# Same check, but ONLY against a /usr/local source build (the one *we* produce
+# and know registers the helper at runtime). Distro packages are excluded.
+check_sensor_helper_local() {
+    local lib
+    for lib in $(find /usr/local/lib /usr/local/lib64 \
+                      /usr/local/lib/x86_64-linux-gnu /usr/local/lib/aarch64-linux-gnu \
+                      -maxdepth 3 \( -name "libcamera.so.0.7*" -o -name "ipa_soft_simple*.so" \) \
+                      -not -type l 2>/dev/null); do
+        if strings "$lib" 2>/dev/null | grep -q "CameraSensorHelperOv02c10"; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 if $FORCE_LIBCAMERA_REBUILD; then
     echo "  ⚠ --force-libcamera-rebuild: building patched libcamera from source regardless of packaged version"
     LIBCAMERA_OK=false
@@ -784,11 +799,31 @@ if $LIBCAMERA_OK; then
     fi
 fi
 
-# Clean up stale /usr/local libcamera builds that are older than the minimum.
-# This can happen if a user previously built libcamera from source (e.g. an
-# older version or an AI-assisted attempt) and later upgraded the system packages
-# to a sufficient version. The stale /usr/local files would shadow the system
-# libraries and GStreamer plugins, causing "Algorithm 'Ccm' not found" failures.
+# Arch/CachyOS caveat: their packaged libcamera (0.7.x) compiles the OV02C10
+# CameraSensorHelper symbols into ipa_soft_simple.so, so check_sensor_helper()
+# (which greps for the symbol) sees it and thinks all is well — but the
+# static-initializer that *registers* the helper factory gets dead-code-
+# eliminated at link time, so at runtime libcamera logs "Failed to create
+# camera sensor helper for ov02c10" and the software AGC has no working gain
+# model. That leaves the OV02C10 stuck at a useless exposure → black frames.
+# (See issue #50.) So on Arch, only trust the helper if it lives in a /usr/local
+# source build we produced; otherwise force the patched source build.
+if [[ "$DISTRO" == "arch" ]] && $LIBCAMERA_OK && ! check_sensor_helper_local 2>/dev/null; then
+    echo "  ⚠ Arch's packaged libcamera has the OV02C10 helper symbols but does not register them"
+    echo "    at runtime — building the patched libcamera from source instead (issue #50)."
+    LIBCAMERA_OK=false
+fi
+
+# Clean up stale /usr/local libcamera builds that would shadow the system
+# package. This can happen if a user previously built libcamera from source
+# (an older version, or an AI-assisted attempt) and later upgraded the system
+# packages. The stale /usr/local files shadow the system libraries and the
+# GStreamer plugin, causing "Algorithm 'Ccm' not found" or silent helper
+# failures. We remove a /usr/local build if it's older than the minimum, OR if
+# it's the *same* minor as the minimum but does NOT contain the OV02C10 helper
+# (i.e. it's a vanilla source build, not the patched one we'd produce — keeping
+# it would just shadow the system package for no benefit). A same-minor build
+# that *does* carry the helper is our patched build and is left alone.
 cleanup_stale_local_libcamera() {
     local stale_ver
     stale_ver=$(ls /usr/local/lib/x86_64-linux-gnu/libcamera.so.0.* \
@@ -812,7 +847,8 @@ cleanup_stale_local_libcamera() {
         return
     fi
 
-    if [[ "$stale_ver" -lt "$min_minor" ]]; then
+    if [[ "$stale_ver" -lt "$min_minor" ]] || \
+       { [[ "$stale_ver" -eq "$min_minor" ]] && ! check_sensor_helper_local 2>/dev/null; }; then
         echo "  ⚠ Removing stale libcamera build (0.$stale_ver) from /usr/local..."
         # Remove stale binaries from the old source build. They link against
         # the libcamera.so.0.X we're about to remove and would fail with
@@ -894,13 +930,17 @@ case "$DISTRO" in
             echo "  ✓ libcamera $LIBCAMERA_VER already installed (>= $LIBCAMERA_MIN_VER, with OV02C10 helper)"
             cleanup_stale_local_libcamera
         else
-            echo "  Installing libcamera from Arch repos..."
+            echo "  Installing libcamera from Arch repos (for deps; the OV02C10 helper comes from the source build below)..."
             sudo pacman -S --needed --noconfirm libcamera gst-plugin-libcamera libcamera-tools 2>/dev/null || true
             LIBCAMERA_VER=$(check_libcamera_version || true)
-            if ! $FORCE_LIBCAMERA_REBUILD && check_libcamera_version >/dev/null 2>&1 && check_sensor_helper 2>/dev/null; then
-                echo "  ✓ libcamera $LIBCAMERA_VER installed from repos with OV02C10 helper"
+            # On Arch we don't trust the packaged libcamera's helper (symbol present
+            # but factory registration dead-code-eliminated — see above / issue #50),
+            # so unless a /usr/local source build with the helper already exists,
+            # always build it from source.
+            if ! $FORCE_LIBCAMERA_REBUILD && check_libcamera_version >/dev/null 2>&1 && check_sensor_helper_local 2>/dev/null; then
+                echo "  ✓ libcamera $LIBCAMERA_VER with OV02C10 helper already present in /usr/local"
             else
-                echo "  Building patched libcamera from source (repo version: ${LIBCAMERA_VER:-none})..."
+                echo "  Building patched libcamera from source (Arch repo version: ${LIBCAMERA_VER:-none})..."
                 build_libcamera_from_source
             fi
         fi
@@ -1116,6 +1156,36 @@ if ! groups "$CURRENT_USER" 2>/dev/null | grep -q '\bvideo\b'; then
     echo "  ✓ Added $CURRENT_USER to video group (takes effect on next login)"
 else
     echo "  ✓ User already in video group"
+fi
+
+# libcamera's software ISP allocates DMA-BUFs for frame buffers. If /dev/dma_heap
+# is root-only (common — e.g. Arch/CachyOS ships /dev/dma_heap/system as 0600
+# root:root) it falls back to /dev/udmabuf, which is typically group 'kvm'. Without
+# that access libcamera uses memfd instead, and the GPU debayer's eglCreateImageKHR
+# can't import a memfd → it fails → black frames (issue #50). Add the user to kvm.
+if getent group kvm >/dev/null 2>&1; then
+    if ! groups "$CURRENT_USER" 2>/dev/null | grep -q '\bkvm\b'; then
+        sudo usermod -aG kvm "$CURRENT_USER"
+        echo "  ✓ Added $CURRENT_USER to kvm group for /dev/udmabuf (takes effect after a full reboot)"
+    else
+        echo "  ✓ User already in kvm group"
+    fi
+fi
+
+# If an NVIDIA GPU is present, libcamera's GPU (EGL) debayer is unreliable
+# (debayer_egl.cpp is incompatible with NVIDIA's proprietary EGL driver, and on
+# hybrid laptops EGL may pick the NVIDIA renderer even when the iGPU is active).
+# camera-relay already forces CPU debayer on its own service unit, but the
+# PipeWire-libcamera path (used by apps that pick that source directly) needs it
+# too — so set it globally for all user services / sessions. (issue #50)
+if [[ -d /proc/driver/nvidia ]] || lspci 2>/dev/null | grep -qi 'VGA.*NVIDIA\|3D controller.*NVIDIA'; then
+    # Don't override if prime-select explicitly puts Intel in charge.
+    if ! { command -v prime-select >/dev/null 2>&1 && [[ "$(prime-select query 2>/dev/null)" == "intel" ]]; }; then
+        sudo mkdir -p /etc/environment.d
+        echo "LIBCAMERA_SOFTISP_MODE=cpu" | \
+            sudo tee /etc/environment.d/10-libcamera-softisp.conf > /dev/null
+        echo "  ✓ NVIDIA GPU detected — set LIBCAMERA_SOFTISP_MODE=cpu globally (CPU debayer)"
+    fi
 fi
 
 # ──────────────────────────────────────────────
@@ -1466,6 +1536,8 @@ if [[ -f /etc/profile.d/libcamera-ipa.sh ]]; then
     echo "    /etc/profile.d/libcamera-ipa.sh"
     echo "    /etc/environment.d/libcamera-ipa.conf"
 fi
+[[ -f /etc/environment.d/10-libcamera-softisp.conf ]] && \
+    echo "    /etc/environment.d/10-libcamera-softisp.conf"
 echo "    /usr/local/share/libcamera/ipa/simple/ov02c10.yaml"
 if [[ -f /usr/local/bin/camera-relay ]]; then
     echo "    /usr/local/bin/camera-relay"
@@ -1486,10 +1558,11 @@ echo "    cd ../camera-relay && ./cheese-fix.sh"
 echo ""
 echo "  *** IMPORTANT: A full system reboot is required! ***"
 echo ""
-echo "  The installer added your user to the 'kvm' group for /dev/udmabuf"
-echo "  access. This only takes effect after a FULL REBOOT — logging out"
-echo "  and back in is NOT sufficient because PipeWire, WirePlumber, and"
-echo "  the camera relay all need to start fresh with the new group."
+echo "  The installer ensured your user is in the 'video' group (camera access)"
+echo "  and, where available, the 'kvm' group (for /dev/udmabuf, used by"
+echo "  libcamera's buffer allocator). Group changes only take effect after a"
+echo "  FULL REBOOT — logging out and back in is NOT sufficient, because"
+echo "  PipeWire, WirePlumber, and the camera relay all need to start fresh."
 echo ""
 echo "  Please reboot now:  sudo reboot"
 echo "=============================================="
