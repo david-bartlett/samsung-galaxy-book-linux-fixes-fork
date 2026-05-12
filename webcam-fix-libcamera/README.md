@@ -279,11 +279,59 @@ camera-relay enable-persistent --yes  # if not enabled
 
 If the camera still doesn't appear, you can try enabling `chrome://flags/#enable-webrtc-pipewire-camera` — but note this flag can break camera access in some browsers (especially Edge). Disable it if it causes problems.
 
-### Desaturated / green-tinted image
+### Desaturated, green-tinted or purple image (colour tuning)
 
-Verify the tuning file is installed:
+The bundled `ov02c10.yaml` ships a conservative colour-correction matrix (CCM).
+It is **not** a full sensor calibration, so depending on your panel and lighting
+the image can still read green/cool (most common) or, on models where the sensor
+is mounted upside-down, purple/magenta. You can tune the CCM yourself.
+
+The easy way — an interactive tuner that cycles through presets with a live
+preview and writes the one you pick to every copy of the tuning file:
 ```bash
-ls /usr/share/libcamera/ipa/simple/ov02c10.yaml /usr/local/share/libcamera/ipa/simple/ov02c10.yaml 2>/dev/null
+cd webcam-fix-libcamera
+./tune-ccm.sh
+```
+
+To do it by hand, edit the matrix in `ov02c10.yaml` (rows should each sum to
+~1.0 so neutral greys stay neutral) — but see the next entry first, because hand
+edits often *look* like they do nothing.
+
+### Editing `ov02c10.yaml` has no effect
+
+Two things bite people here:
+
+1. **The tuning file is read once, when the camera is opened.** `camera-relay`
+   and PipeWire keep a libcamera instance alive, so an edit isn't picked up until
+   they're restarted (or you reboot):
+   ```bash
+   systemctl --user restart camera-relay.service pipewire.service wireplumber.service
+   ```
+   Then close and reopen the app you're testing with. `./tune-ccm.sh` does this
+   for you.
+
+2. **There can be two copies of the file.** The distro one is at
+   `/usr/share/libcamera/ipa/simple/ov02c10.yaml`; if libcamera was built from
+   source (the installer does this on Ubuntu, and on any distro with
+   `--force-libcamera-rebuild`) there's a second copy at
+   `/usr/local/share/libcamera/ipa/simple/ov02c10.yaml`. Whichever libcamera is
+   actually loaded reads *its own* copy — edit the wrong one and nothing changes.
+   Check which file is in use:
+   ```bash
+   LIBCAMERA_LOG_LEVELS=IPAProxy:INFO cam -c1 -C1 2>&1 | grep -i "tuning file"
+   ```
+   Edit the path it prints, or edit both, or just use `./tune-ccm.sh` (it writes
+   to all of them).
+
+If no matrix you try makes any difference and you also see this in the log:
+```
+WARN IPASoft soft_simple.cpp:... IPASoft: Failed to create camera sensor helper for ov02c10
+```
+then your libcamera doesn't have the OV02C10 sensor helper, so auto-exposure and
+auto-white-balance fall back to a generic path and the colours will be wrong no
+matter what the CCM says. Rebuild libcamera with the helper patched in:
+```bash
+sudo ./install.sh --force-libcamera-rebuild
 ```
 
 ---
