@@ -334,6 +334,33 @@ matter what the CCM says. Rebuild libcamera with the helper patched in:
 sudo ./install.sh --force-libcamera-rebuild
 ```
 
+> **Note (Arch/Fedora):** `cam` and `qcam` may keep printing the
+> "Failed to create camera sensor helper" warning *even after* a successful
+> `--force-libcamera-rebuild`. Those tools load the distro's packaged libcamera
+> (its `.so` is a higher patch version, so the dynamic linker prefers it), not
+> the patched build in `/usr/local`. The **camera relay** runs its pipeline with
+> `LD_LIBRARY_PATH=/usr/local/lib`, so it *does* use the patched build — which is
+> what every app that goes through the relay (Firefox, Chrome, Zoom, OBS, VLC,
+> mpv, …) actually sees. Apps that talk to libcamera directly without the relay
+> (`cam`, `qcam`, GNOME Snapshot, Chromium with the `enable-webrtc-pipewire-camera`
+> flag) are the exception and may still get the unpatched system libcamera on
+> those distros. To confirm the *relay* picked up the patched build:
+> ```bash
+> camera-relay status
+> journalctl --user -u camera-relay -b | grep -i 'libcamera\|GStreamer plugin'
+> ```
+
+### Camera upside-down after running `cam` or `qcam`
+
+Opening the sensor directly with `cam`/`qcam` resets the V4L2 flip controls when
+it exits. A relay that's already streaming doesn't re-apply them, so on models
+with an inverted sensor (e.g. Galaxy Book3 Ultra 960XFH) the relay's image ends
+up upside-down until you restart it:
+```bash
+systemctl --user restart camera-relay.service
+```
+Avoid poking the camera with `cam`/`qcam` while the relay is running.
+
 ---
 
 ## Legacy Webcam Fix

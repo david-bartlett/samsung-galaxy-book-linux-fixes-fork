@@ -274,6 +274,10 @@ if [[ $SELECTED -ge 0 ]]; then
     restart_consumers
     echo "  Camera pipeline restarted with the new matrix."
     echo "  (If an app was already open, close and reopen it.)"
+    echo ""
+    echo "  Tip: don't open the camera with 'cam'/'qcam' while the relay is"
+    echo "  running — it resets the sensor flip and the relay image ends up"
+    echo "  upside-down until 'systemctl --user restart camera-relay.service'."
 else
     if [[ ${#BACKUPS[@]} -gt 0 ]]; then
         for i in "${!BACKUPS[@]}"; do
