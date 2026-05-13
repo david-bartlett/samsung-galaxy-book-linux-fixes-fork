@@ -15,6 +15,56 @@ set -e
 
 SENSOR="${1:-ov02c10}"
 
+# ─── Book5 / OV02E10: warn if the bayer-order fix isn't active ──────────
+# On Samsung Book5 laptops the OV02E10 is mounted upside-down. Once the sensor
+# is flipped the bayer pattern shifts, but the kernel driver never updates the
+# media-bus format code, so the SoftISP debayer reads the wrong pattern → a
+# purple/magenta tint. That is a *bayer-order* problem, not a colour-matrix one:
+# the flip folds the red and blue samples onto the same (green) positions, so the
+# information needed to separate them is gone — no 3x3 CCM in this tool can
+# recover it. The real fix is the patched libcamera built by
+# libcamera-bayer-fix/build-patched-libcamera.sh. Don't let users burn time
+# cycling CCM presets at a purple image when that's not what's wrong.
+if [[ "$SENSOR" == "ov02e10" ]]; then
+    BAYER_FIX_OK=false
+    if [[ -d /var/lib/libcamera-bayer-fix-backup ]]; then
+        bf_backup_ver=$(grep -oP '^[0-9]+\.[0-9]+\.[0-9]+' /var/lib/libcamera-bayer-fix-backup/version 2>/dev/null \
+            || tr -d ' \n' < /var/lib/libcamera-bayer-fix-backup/version 2>/dev/null || true)
+        cur_lc_ver=$(pkg-config --modversion libcamera 2>/dev/null | grep -oP '^[0-9]+\.[0-9]+\.[0-9]+' || true)
+        if [[ -z "$cur_lc_ver" ]]; then
+            cur_lc_ver=$(ls -l /usr/local/lib64/libcamera.so.* /usr/local/lib/*/libcamera.so.* /usr/local/lib/libcamera.so.* \
+                /usr/lib64/libcamera.so.* /usr/lib/*/libcamera.so.* /usr/lib/libcamera.so.* 2>/dev/null \
+                | grep -oP 'libcamera\.so\.\K[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -1 || true)
+        fi
+        if [[ -z "$bf_backup_ver" || -z "$cur_lc_ver" || "$bf_backup_ver" == "$cur_lc_ver" ]]; then
+            BAYER_FIX_OK=true
+        fi
+    fi
+    if ! $BAYER_FIX_OK; then
+        echo ""
+        echo "  ⚠  OV02E10 selected and the libcamera bayer-order fix does not look active."
+        echo ""
+        echo "     If your image is purple/magenta, that is a BAYER-PATTERN mismatch from the"
+        echo "     upside-down sensor being flipped — NOT a colour-matrix problem. None of the"
+        echo "     CCM presets in this tool can fully fix it (the flip folds red and blue onto"
+        echo "     the same samples — the information is gone). Install the patched libcamera"
+        echo "     first:"
+        echo ""
+        echo "         sudo ./libcamera-bayer-fix/build-patched-libcamera.sh"
+        echo "         systemctl --user restart pipewire wireplumber camera-relay.service 2>/dev/null || \\"
+        echo "             systemctl --user restart pipewire wireplumber"
+        echo ""
+        echo "     Then come back here for any leftover white-balance / saturation tweaks"
+        echo "     (a mild green or warm cast *after* the bayer fix IS fixable with these presets)."
+        echo ""
+        read -r -p "  Continue with CCM tuning anyway? [y/N] " _ans || _ans=""
+        case "$_ans" in
+            y|Y|yes|YES) echo "" ;;
+            *) echo "  Aborted."; exit 0 ;;
+        esac
+    fi
+fi
+
 # Find the tuning file location
 TUNING_FILE=""
 for dir in /usr/local/share/libcamera/ipa/simple \

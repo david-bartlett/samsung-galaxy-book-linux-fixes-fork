@@ -135,9 +135,9 @@ If you still see a flipped image on a different model, the rotation metadata for
 
 ### OV02E10 purple / magenta tint
 
-Samsung Book5 models with the OV02E10 sensor mounted upside-down (940XHA, 960XHA) can get purple/magenta tint after the rotation fix is applied. This happens because the bayer pattern shifts when the sensor is flipped horizontally, but the OV02E10 kernel driver doesn't update the media bus format code to reflect the new pattern. The SoftISP debayer then uses the wrong bayer order, producing incorrect colors.
+Samsung Book5 models with the OV02E10 sensor mounted upside-down (940XHA, 960XHA, …) can get a purple/magenta tint once the sensor is flipped. This happens because the bayer pattern shifts when the sensor is flipped, but the OV02E10 kernel driver doesn't update the media bus format code to reflect the new pattern. The SoftISP debayer then uses the wrong bayer order, producing incorrect colors.
 
-**The installer automatically builds and installs a patched libcamera** for OV02E10 systems that need the rotation fix. The patch overrides the bayer order in the Simple pipeline handler based on the actual sensor transform (HFlip-only XOR). Original library files are backed up to `/var/lib/libcamera-bayer-fix-backup/` and can be restored with the uninstaller.
+**The installer automatically builds and installs a patched libcamera** for OV02E10 systems where the sensor is flipped — that's true both when this repo's `ipu-bridge` rotation fix is installed *and* when a newer kernel already carries the Samsung rotation quirk upstream. The patch overrides the bayer order in the Simple pipeline handler based on the actual sensor transform (HFlip-only XOR). Original library files are backed up to `/var/lib/libcamera-bayer-fix-backup/` and can be restored with the uninstaller.
 
 If you need to reinstall or update the bayer fix manually:
 ```bash
@@ -149,7 +149,15 @@ To uninstall just the bayer fix (restore original libcamera):
 sudo ./libcamera-bayer-fix/build-patched-libcamera.sh --uninstall
 ```
 
-**Note:** System package updates may overwrite the patched library. If purple tint returns after an update, re-run the bayer fix script.
+**System updates overwrite the patch.** Ordinary upgrades (`dnf upgrade`, `apt upgrade`, `pacman -Syu`) replace `libcamera.so` with the stock distro build, which silently brings the purple tint back. Re-running `./install.sh` detects this — it compares the libcamera version currently installed against the one recorded when the patch was built — and rebuilds the patch automatically. You can also just re-run `sudo ./libcamera-bayer-fix/build-patched-libcamera.sh` yourself. To check whether the fix is in place:
+```bash
+ls -l /var/lib/libcamera-bayer-fix-backup/      # backup dir exists ⇒ patch was applied at some point
+cat /var/lib/libcamera-bayer-fix-backup/version # libcamera version the patch was built against
+pkg-config --modversion libcamera               # version installed now — must still match the line above
+```
+After (re)building, restart PipeWire so apps pick up the new library: `systemctl --user restart pipewire wireplumber` (and `camera-relay.service` if you use the relay).
+
+**`tune-ccm.sh` cannot fix this.** If you've tried the CCM presets and none of them removes the purple, that's expected — the tint is a bayer-pattern shift, not a colour-matrix error. Flipping the sensor folds the red and blue samples onto the same positions, so the information needed to separate them is gone; no 3×3 matrix can recover it. Only the patched libcamera above corrects it. Once the bayer fix is active, `tune-ccm.sh` is still useful for any remaining mild green/warm cast (and it now warns you up front on OV02E10 if the bayer fix doesn't look active).
 
 ### Concurrent camera access (only one app at a time)
 

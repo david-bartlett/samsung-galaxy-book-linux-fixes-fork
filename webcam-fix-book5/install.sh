@@ -490,34 +490,97 @@ fi
 echo ""
 echo "[8/15] Checking for OV02E10 bayer order fix..."
 
-# Samsung Book5 models with the OV02E10 sensor mounted upside-down (rotation=180)
-# get purple/magenta tint after the ipu-bridge rotation fix is applied. This is
-# because the bayer pattern shifts when the sensor is flipped, but the kernel
-# driver doesn't update the media bus format code. A patched libcamera build
-# corrects the bayer order in the Simple pipeline handler's SoftISP debayer.
+# Samsung Book5 models with the OV02E10 sensor mounted upside-down get a
+# purple/magenta tint once the sensor is flipped (hflip+vflip): the bayer
+# pattern shifts but the OV02E10 kernel driver never updates the media bus
+# format code, so the SoftISP debayer reads the wrong pattern. A patched
+# libcamera build corrects the bayer order in the Simple pipeline handler.
+#
+# The flip happens both when our ipu-bridge DKMS rotation fix is installed AND
+# when a newer kernel already carries the Samsung rotation quirk upstream — so
+# don't gate the bayer fix on NEEDS_ROTATION_FIX alone, or users on newer
+# kernels end up with purple and no fix.
+SENSOR_IS_FLIPPED=false
+if $NEEDS_ROTATION_FIX; then
+    SENSOR_IS_FLIPPED=true
+elif dkms status "ipu-bridge-fix" 2>/dev/null | grep -q "installed"; then
+    SENSOR_IS_FLIPPED=true
+else
+    # Does the running kernel's own ipu-bridge module already carry the
+    # Samsung upside-down quirk? (Landed upstream after the 6.13 era.)
+    NATIVE_IPU_BRIDGE=$(find "/lib/modules/$(uname -r)/kernel" -name "ipu-bridge*" 2>/dev/null | head -1)
+    if [[ -n "$NATIVE_IPU_BRIDGE" ]]; then
+        case "$NATIVE_IPU_BRIDGE" in
+            *.zst) DECOMPRESS="zstdcat" ;;
+            *.xz)  DECOMPRESS="xzcat" ;;
+            *.gz)  DECOMPRESS="zcat" ;;
+            *)     DECOMPRESS="cat" ;;
+        esac
+        if $DECOMPRESS "$NATIVE_IPU_BRIDGE" 2>/dev/null | strings | grep -qE "940XHA|960XHA|960QHA"; then
+            SENSOR_IS_FLIPPED=true
+        fi
+    fi
+fi
 
-if [[ "$SENSOR" == "ov02e10" ]] && $NEEDS_ROTATION_FIX; then
+if [[ "$SENSOR" == "ov02e10" ]] && $SENSOR_IS_FLIPPED; then
     BAYER_FIX_BACKUP="/var/lib/libcamera-bayer-fix-backup"
+    BAYER_FIX_SCRIPT="$SCRIPT_DIR/libcamera-bayer-fix/build-patched-libcamera.sh"
+
+    # Work out which libcamera version is currently providing libcamera.so.
+    # Ordinary system updates (dnf/apt/pacman upgrade) overwrite the patched
+    # .so with the stock distro build, silently bringing the purple back — so
+    # "backup exists" isn't enough; the version has to still match.
+    CUR_LC_VER=""
+    if command -v pkg-config >/dev/null 2>&1; then
+        CUR_LC_VER=$(pkg-config --modversion libcamera 2>/dev/null | grep -oP '^[0-9]+\.[0-9]+\.[0-9]+' || true)
+    fi
+    if [[ -z "$CUR_LC_VER" ]]; then
+        CUR_LC_VER=$(ls -l /usr/local/lib64/libcamera.so.* /usr/local/lib/*/libcamera.so.* /usr/local/lib/libcamera.so.* \
+            /usr/lib64/libcamera.so.* /usr/lib/*/libcamera.so.* /usr/lib/libcamera.so.* 2>/dev/null \
+            | grep -oP 'libcamera\.so\.\K[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -1 || true)
+    fi
+
     if [[ -d "$BAYER_FIX_BACKUP" ]]; then
-        echo "  ✓ Bayer fix already installed (backup exists at $BAYER_FIX_BACKUP)"
+        BACKUP_LC_VER=$(grep -oP '^[0-9]+\.[0-9]+\.[0-9]+' "$BAYER_FIX_BACKUP/version" 2>/dev/null \
+            || tr -d ' \n' < "$BAYER_FIX_BACKUP/version" 2>/dev/null || true)
+        if [[ -n "$CUR_LC_VER" && -n "$BACKUP_LC_VER" && "$CUR_LC_VER" != "$BACKUP_LC_VER" ]]; then
+            echo "  ⚠ libcamera changed since the bayer fix was applied (${BACKUP_LC_VER} → ${CUR_LC_VER})."
+            echo "    A system update almost certainly overwrote the patched library — rebuilding..."
+            echo ""
+            # Drop the stale backup so the rebuild backs up the *current* stock libs.
+            sudo rm -rf "$BAYER_FIX_BACKUP"
+            if sudo "$BAYER_FIX_SCRIPT"; then
+                echo "  ✓ Patched libcamera re-installed (bayer order fix)"
+            else
+                echo ""
+                echo "  ⚠ Bayer fix rebuild failed — camera will work but may have purple tint."
+                echo "    Retry later: sudo ./libcamera-bayer-fix/build-patched-libcamera.sh"
+            fi
+        else
+            echo "  ✓ Bayer fix already installed (backup at $BAYER_FIX_BACKUP, libcamera ${CUR_LC_VER:-unknown})"
+        fi
     else
-        echo "  OV02E10 + rotation fix detected — building patched libcamera..."
-        echo "  (This fixes purple/magenta tint caused by bayer pattern mismatch)"
+        echo "  OV02E10 + sensor flip detected — building patched libcamera..."
+        echo "  (Fixes the purple/magenta tint from the bayer-pattern mismatch on flip.)"
         echo ""
         # SCRIPT_DIR set at top of script
-        if sudo "$SCRIPT_DIR/libcamera-bayer-fix/build-patched-libcamera.sh"; then
+        if sudo "$BAYER_FIX_SCRIPT"; then
             echo "  ✓ Patched libcamera installed (bayer order fix)"
         else
             echo ""
-            echo "  ⚠ Bayer fix build failed — camera will work but may have purple tint."
-            echo "    You can retry later: sudo ./libcamera-bayer-fix/build-patched-libcamera.sh"
+            echo "  ⚠ Bayer fix build FAILED — the camera will work but the image will have a"
+            echo "    purple/magenta tint until this succeeds. This is NOT something tune-ccm.sh"
+            echo "    can fix (it's a bayer-pattern shift, not a colour-matrix issue)."
+            echo "    Retry: sudo ./libcamera-bayer-fix/build-patched-libcamera.sh"
         fi
     fi
 else
     if [[ "$SENSOR" == "ov02e10" ]]; then
-        echo "  ✓ OV02E10 detected but no rotation fix needed — bayer fix not required"
+        echo "  ✓ OV02E10 detected, sensor not flipped — bayer fix not required"
+        echo "    (If you later see an upside-down image and apply a rotation fix, re-run"
+        echo "     install.sh or: sudo ./libcamera-bayer-fix/build-patched-libcamera.sh)"
     else
-        echo "  ✓ Not OV02E10 with rotation fix — bayer fix not needed"
+        echo "  ✓ Not OV02E10 with a flipped sensor — bayer fix not needed"
     fi
 fi
 
