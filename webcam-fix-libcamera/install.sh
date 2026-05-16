@@ -334,14 +334,33 @@ if ! $DKMS_26MHZ_INSTALLED; then
                 echo "  Running 26 MHz DKMS fix installer..."
                 sudo bash "$DKMS_FIX_SCRIPT"
 
-                # Verify the fix worked
+                # Verify the fix worked.
+                # The in-tree driver has already probed this boot, so dmesg
+                # still shows the old 26 MHz rejection — that alone does NOT
+                # mean failure. What actually matters is which ov02c10.ko
+                # modprobe now resolves, and (under Secure Boot) whether the
+                # patched module can even be loaded. Don't claim success on a
+                # bare "dkms installed".
                 sleep 2
-                if dmesg 2>/dev/null | grep -qi "external clock 26000000 is not supported" && \
-                   ! dkms status ov02c10/1.0 2>/dev/null | grep -q "installed"; then
-                    echo "  ⚠ DKMS fix may not have applied correctly."
-                    echo "    A reboot may be needed for the patched driver to load."
+                OV_PATH=$(modinfo ov02c10 2>/dev/null | awk '/^filename:/{print $2}')
+                if echo "$OV_PATH" | grep -q "/updates/"; then
+                    echo "  ✓ Patched ov02c10 in place ($OV_PATH)"
+                    echo "    Reboot required — the stock driver is still bound this boot."
                 else
-                    echo "  ✓ 26 MHz DKMS fix installed successfully"
+                    echo "  ⚠ modprobe still resolves the stock ov02c10 ($OV_PATH)."
+                    echo "    The 26 MHz fix will NOT take effect until this is resolved:"
+                    if mokutil --sb-state 2>/dev/null | grep -q "SecureBoot enabled"; then
+                        echo "      • Secure Boot is ENABLED — the unsigned/unenrolled module is"
+                        echo "        rejected and the kernel falls back to the in-tree driver."
+                        echo "        Complete MOK enrollment on the next boot (the DKMS"
+                        echo "        installer queues it), then reboot and re-run this script."
+                    fi
+                    if ! dkms status ov02c10/1.0 2>/dev/null | grep -q "installed"; then
+                        echo "      • DKMS build/install did not complete — see the output above"
+                        echo "        and /var/lib/dkms/ov02c10/1.0/build/make.log"
+                    fi
+                    echo "      • Otherwise just reboot so /updates/ takes priority, then:"
+                    echo "        dmesg | grep -i ov02c10 ; modinfo ov02c10 | grep filename"
                 fi
 
                 # Clean up temp download

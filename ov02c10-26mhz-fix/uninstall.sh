@@ -20,6 +20,13 @@ fi
 
 rm -rf "/usr/src/${DKMS_NAME}-${DKMS_VERSION}"
 
+# Remove the DKMS signing config this fix installed (leave the MOK key and its
+# firmware enrollment alone — other DKMS modules may depend on it).
+rm -f /etc/dkms/framework.conf.d/ov02c10-mok-keys.conf
+
+# Refresh module dependencies so the in-tree driver is resolved again.
+depmod -a 2>/dev/null || true
+
 # Reload stock module
 if lsmod | grep -q "^ov02c10"; then
     rmmod ov02c10 2>/dev/null || true
