@@ -136,6 +136,12 @@ let
 
   cameraRelayServiceEnvironment = {
     LIBCAMERA_IPA_MODULE_PATH = "${pkgs.libcamera}/lib/libcamera/ipa";
+    GST_PLUGIN_SYSTEM_PATH_1_0 = lib.makeSearchPath "lib/gstreamer-1.0" (map lib.getLib [
+      pkgs.gst_all_1.gstreamer
+      pkgs.gst_all_1.gst-plugins-base
+      pkgs.gst_all_1.gst-plugins-good
+      pkgs.gst_all_1.gst-plugins-bad
+    ]);
     GST_PLUGIN_PATH = lib.makeSearchPath "lib/gstreamer-1.0" [ pkgs.libcamera ];
     LD_LIBRARY_PATH = lib.makeLibraryPath [ pkgs.libcamera ];
   };
@@ -233,9 +239,7 @@ in
   nixpkgs.overlays = [
     (final: prev: {
       libcamera = prev.libcamera.overrideAttrs (old: {
-        patches = (old.patches or [ ]) ++ [
-          ../webcam-fix-book5/libcamera-bayer-fix/bayer-fix-v0.6.patch
-        ];
+
         postPatch = (old.postPatch or "") + ''
           # libcamera 0.7.0 does NOT register CameraSensorHelper for OV02C10
           # or OV02E10. Without these helpers, IPASoft's auto-exposure falls
