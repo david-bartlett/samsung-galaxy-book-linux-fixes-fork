@@ -232,6 +232,7 @@ Thanks to the following users for their contributions and testing:
 - **[@MatiDegli](https://github.com/MatiDegli)** — Created [speaker-on/off/status helper scripts](https://github.com/Andycodeman/samsung-galaxy-book4-linux-fixes/discussions/4) for manually toggling the speaker fix on and off. Note: the driver already powers down the amps when idle, so this isn't needed for battery savings, but may be useful if you want to explicitly unload the modules. Community-contributed and not officially tested — use at your own discretion.
 - **[@pagliarinilucas](https://github.com/pagliarinilucas)** — NixOS module for the speaker fix (declarative kernel module build + I2C device setup). See [`nixos/`](nixos/).
 - **[@derwismtz](https://github.com/derwismtz)** — Tireless testing and Windows trace work that made the Book3 Pro 14" (NP940XFG) speaker fix possible. See [`speaker-fix-940xfg/`](speaker-fix-940xfg/) and [#44](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/44).
+- **[@ang3lo-azevedo](https://github.com/ang3lo-azevedo)** — Created the NixOS module for the Book5 webcam fix and helped test/verify the IPU7 CachyOS kernel compatibility.
 
 ## Credits
 
@@ -247,7 +248,7 @@ Thanks to the following users for their contributions and testing:
 
 ## NixOS
 
-NixOS users can use the declarative Nix modules in [`nixos/`](nixos/) instead of the install scripts. Import `nixos/samsung-speaker-fix.nix` for the speaker fix, `nixos/webcam-fix-libcamera.nix` for the Book3/Book4 webcam fix, and `nixos/webcam-fix-book5.nix` for the Book5 webcam fix, then run `nixos-rebuild switch`. The speaker module builds the kernel modules from source, loads them at boot, and sets up I2C amplifier detection via systemd. The webcam modules load the camera stack early, install the relay or IPU7 module configuration, hide raw V4L2 nodes in WirePlumber, and start the camera services. See the module files for details. Contributed by [@pagliarinilucas](https://github.com/pagliarinilucas).
+NixOS users can use the declarative Nix modules in [`nixos/`](nixos/) instead of the install scripts. Import `nixos/samsung-speaker-fix.nix` for the speaker fix, `nixos/webcam-fix-libcamera.nix` for the Book3/Book4 webcam fix, and `nixos/webcam-fix-book5.nix` for the Book5 webcam fix, then run `nixos-rebuild switch`. The speaker module builds the kernel modules from source, loads them at boot, and sets up I2C amplifier detection via systemd. The webcam modules load the camera stack early, install the relay or IPU7 module configuration, hide raw V4L2 nodes in WirePlumber, and start the camera services. See the module files for details. Contributed by [@pagliarinilucas](https://github.com/pagliarinilucas) (speaker/Book3) and [@ang3lo-azevedo](https://github.com/ang3lo-azevedo) (Book5).
 
 If your camera image comes out upside-down on a Galaxy Book 360 / convertible (e.g. NP960QHA, NP960QFG, NP960QGK) — i.e. the bundled `ipu-bridge` kernel module override didn't engage — set `hardware.samsungGalaxyBook.webcamFixBook5.videoFlip = true;` in your NixOS configuration to flip the camera-relay output in userspace.
 
