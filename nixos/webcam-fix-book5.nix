@@ -211,12 +211,8 @@ in
            force a 180-degree transform on the ov02e10 sensor only.
            PipeWire-using apps (Firefox with
            `media.webrtc.camera.allow-pipewire = true`, GNOME
-           Snapshot, etc.) get correctly oriented + correctly coloured
-           output via libcamera-direct.
-
-        2. Setting `RELAY_COLOR_FILTER=videoflip method=vertical-flip`
-           on the camera-relay user service so V4L2-only apps that go
-           through the v4l2loopback bridge also get a flipped frame.
+           Snapshot, etc.) and v4l2loopback apps get correctly
+           oriented + correctly coloured output natively via libcamera.
 
         Strictly opt-in. The env var is only consumed by the libcamera
         bayer-fix patch when the sensor model is exactly `ov02e10`, so
@@ -239,6 +235,9 @@ in
   nixpkgs.overlays = [
     (final: prev: {
       libcamera = prev.libcamera.overrideAttrs (old: {
+        patches = (old.patches or [ ]) ++ [
+          ../webcam-fix-book5/libcamera-bayer-fix/bayer-fix-v0.6.patch
+        ];
 
         postPatch = (old.postPatch or "") + ''
           # libcamera 0.7.0 does NOT register CameraSensorHelper for OV02C10
@@ -368,7 +367,6 @@ in
       RestartSec = 5;
     };
     environment = cameraRelayServiceEnvironment // lib.optionalAttrs cfg.videoFlip {
-      RELAY_COLOR_FILTER = "videoflip method=vertical-flip";
       LIBCAMERA_FORCE_OV02E10_ROTATION = "180";
     };
   };
