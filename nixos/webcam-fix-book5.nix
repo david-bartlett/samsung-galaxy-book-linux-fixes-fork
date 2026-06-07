@@ -368,7 +368,8 @@ in
     };
     environment = cameraRelayServiceEnvironment // lib.optionalAttrs cfg.videoFlip {
       LIBCAMERA_FORCE_OV02E10_ROTATION = "180";
-      RELAY_COLOR_FILTER = "videoflip method=vertical-flip";
+      # Adjust videobalance to help counteract the inverted LSC purple tint
+      RELAY_COLOR_FILTER = "videoflip method=vertical-flip ! videobalance hue=0.05 saturation=0.95";
     };
   };
 
