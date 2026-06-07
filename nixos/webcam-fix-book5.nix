@@ -194,9 +194,8 @@ in
       example = true;
       description = ''
         Force the OV02E10 sensor to be treated as rotation=180 inside
-        libcamera, and apply the same flip to the camera-relay output
-        via `RELAY_COLOR_FILTER=videoflip method=vertical-flip` for the
-        v4l2loopback path.
+        libcamera. This corrects the Bayer grid decoding (fixing purple
+        color tints) and provides rotation metadata to PipeWire.
 
         Enable this on Samsung Galaxy Book 360 / convertible models
         (NP960QHA, NP960QFG, NP960QGK, ...) where the OV02E10 sensor is
@@ -204,22 +203,21 @@ in
         kernel module override reports rotation=180 to libcamera via
         SSDB and everything Just Works — but on NixOS the in-tree
         ipu-bridge can win at modprobe time and the rotation is never
-        reported. This option papers over that by:
-
-        1. Setting `LIBCAMERA_FORCE_OV02E10_ROTATION=180` system-wide,
-           which the bundled libcamera bayer-fix patch consumes to
-           force a 180-degree transform on the ov02e10 sensor only.
-           PipeWire-using apps (Firefox with
-           `media.webrtc.camera.allow-pipewire = true`, GNOME
-           Snapshot, etc.) and v4l2loopback apps get correctly
-           oriented + correctly coloured output natively via libcamera.
+        reported. This option papers over that by setting
+        `LIBCAMERA_FORCE_OV02E10_ROTATION=180` system-wide.
 
         Strictly opt-in. The env var is only consumed by the libcamera
-        bayer-fix patch when the sensor model is exactly `ov02e10`, so
-        other sensors and other distros' libcamera builds are
-        unaffected even if the env var is set.
+        bayer-fix patch when the sensor model is exactly `ov02e10`.
+      '';
+    };
 
-        Leave disabled if your image is already correctly oriented.
+    relayColorFilter = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+      example = "videoflip method=vertical-flip ! videobalance hue=0.05 saturation=0.95";
+      description = ''
+        Optional GStreamer elements to apply to the camera-relay output.
+        Can be used to apply video flips or color balancing for V4L2 apps.
       '';
     };
   };
@@ -368,8 +366,8 @@ in
     };
     environment = cameraRelayServiceEnvironment // lib.optionalAttrs cfg.videoFlip {
       LIBCAMERA_FORCE_OV02E10_ROTATION = "180";
-      # Adjust videobalance to help counteract the inverted LSC purple tint
-      RELAY_COLOR_FILTER = "videoflip method=vertical-flip ! videobalance hue=0.05 saturation=0.95";
+    } // lib.optionalAttrs (cfg.relayColorFilter != "") {
+      RELAY_COLOR_FILTER = cfg.relayColorFilter;
     };
   };
 
