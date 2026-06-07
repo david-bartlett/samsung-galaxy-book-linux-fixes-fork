@@ -199,7 +199,7 @@ SOF_BIN_DIR=$(ls -d sof-bin-* 2>/dev/null | head -1)
 if [ -z "$SOF_BIN_DIR" ] || [ ! -d "$SOF_BIN_DIR/sof-ipc4" ]; then
     echo "ERROR: Unexpected archive structure — sof-ipc4 directory not found." >&2
     echo "       Please file an issue at:" >&2
-    echo "       https://github.com/Andycodeman/samsung-galaxy-book4-linux-fixes/issues" >&2
+    echo "       https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues" >&2
     exit 1
 fi
 
