@@ -368,6 +368,7 @@ in
     };
     environment = cameraRelayServiceEnvironment // lib.optionalAttrs cfg.videoFlip {
       LIBCAMERA_FORCE_OV02E10_ROTATION = "180";
+      RELAY_COLOR_FILTER = "videoflip method=vertical-flip";
     };
   };
 
