@@ -246,6 +246,7 @@ If that doesn't help, verify that `pipewire-libcamera` (Arch) or `pipewire-plugi
 |--------|----------|--------|--------|--------|-------|
 | Samsung Galaxy Book5 Pro (940XHA) | Lunar Lake | Fedora 43/44 | 6.18+ | **Working** | OV02E10. Correct colors + orientation with bayer fix. |
 | Samsung Galaxy Book5 Pro 16" (960XHA) | Lunar Lake | Ubuntu 24.04 | 6.19.2 | **Working** | OV02E10. Correct colors + orientation with bayer fix. Cheese also works. |
+| Samsung Galaxy Book5 Pro 16" (960XHA) | Lunar Lake | NixOS | 7.0.10 | **Working** | OV02E10. Correct colors + orientation with bayer fix v0.7. |
 | Samsung Galaxy Book5 360 | Lunar Lake | Fedora 42 | 6.18+ | **Working** | Community report (browsers) |
 | Dell XPS 13 9350 | Lunar Lake | Arch | 6.18+ | **Working** | OV02C10 sensor |
 | Lenovo X1 Carbon Gen13 | Lunar Lake | Fedora 42 | 6.18+ | **Working** | Confirmed by community |
@@ -364,6 +365,7 @@ On Arch with Secure Boot, you'll need to sign the module manually or use a tool 
 - **[Andycodeman](https://github.com/Andycodeman)** — Installer script, packaging, bayer fix, documentation
 - **[david-bartlett](https://github.com/david-bartlett)** — CCM color tuning, testing on 940XHA (Fedora)
 - **[jn-simonnet](https://github.com/jn-simonnet)** — Testing and verification on 960XHA (Ubuntu)
+- **[ang3lo-azevedo](https://github.com/ang3lo-azevedo)** — Testing and verification on 960XHA (NixOS, CachyOS kernel)
 - **[Intel vision-drivers](https://github.com/intel/vision-drivers)** — CVS kernel module (DKMS)
 - **libcamera project** — Open-source camera stack with IPU7 support
 
