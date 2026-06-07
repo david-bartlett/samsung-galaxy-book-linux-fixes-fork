@@ -211,7 +211,11 @@ static int read_full(int fd, char *buf, int n, int out_fd, const char *black_fra
 		int ret = poll(&pfd, 1, 100);
 		if (ret == 0) {
 			if (total == 0 && out_fd >= 0 && black_frame) {
-				(void)!write(out_fd, black_frame, n);
+				struct pollfd pout = { .fd = out_fd, .events = POLLOUT };
+				if (poll(&pout, 1, 0) > 0 && (pout.revents & POLLOUT)) {
+					ssize_t w = write(out_fd, black_frame, n);
+					(void)w; /* Best effort pump, ignore errors/partials */
+				}
 			}
 			continue;
 		}
