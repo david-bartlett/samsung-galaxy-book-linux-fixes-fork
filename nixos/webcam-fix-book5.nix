@@ -235,6 +235,9 @@ in
   nixpkgs.overlays = [
     (final: prev: {
       libcamera = prev.libcamera.overrideAttrs (old: {
+        patches = (old.patches or [ ]) ++ [
+          ../webcam-fix-book5/libcamera-bayer-fix/bayer-fix-v0.7.patch
+        ];
 
         postPatch = (old.postPatch or "") + ''
           # libcamera 0.7.0 does NOT register CameraSensorHelper for OV02C10
