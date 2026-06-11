@@ -154,7 +154,7 @@ detect_loopback_device() {
         card_name=$(cat "$dev" 2>/dev/null)
         case "$card_name" in
             *"Droidcam"*|*"OBS"*) continue ;;
-            *"Loopback"*|*"v4l2loopback"*|*"Intel MIPI Camera"*)
+            *"Loopback"*|*"v4l2loopback"*|*"Intel MIPI Camera"*|*"Built-in Front Camera"*)
                 fallback_dev="/dev/$(basename "$(dirname "$dev")")"
                 ;;
         esac
