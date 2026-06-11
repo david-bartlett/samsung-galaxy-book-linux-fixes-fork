@@ -345,7 +345,7 @@ in
     '';
 
     "modprobe.d/99-camera-relay-loopback.conf".text = ''
-      options v4l2loopback devices=1 exclusive_caps=0 card_label="Camera Relay"
+      options v4l2loopback devices=1 exclusive_caps=0 card_label="Built-in Front Camera"
     '';
   } // lib.optionalAttrs wireplumberUsesConf {
     "wireplumber/wireplumber.conf.d/50-disable-ipu7-v4l2.conf".text = wireplumberConfRule;
