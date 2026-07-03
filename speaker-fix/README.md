@@ -7,7 +7,7 @@
 Download and install in one step — no git required:
 
 ```bash
-curl -sL https://github.com/Andycodeman/samsung-galaxy-book4-linux-fixes/archive/refs/heads/main.tar.gz | tar xz && cd samsung-galaxy-book4-linux-fixes-main/speaker-fix && sudo ./install.sh && sudo reboot
+curl -sL https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/archive/refs/heads/main.tar.gz | tar xz && cd samsung-galaxy-book-linux-fixes-main/speaker-fix && sudo ./install.sh && sudo reboot
 ```
 
 **Already cloned?** `sudo ./install.sh && sudo reboot`
@@ -25,6 +25,7 @@ To uninstall: `sudo ./uninstall.sh && sudo reboot`
 Samsung Galaxy Book4 laptops using **MAX98390 speaker amplifiers** have no audio output from the built-in speakers on Linux. The headphone jack works fine, but the laptop speakers are completely silent.
 
 **Tested on:**
+
 - Samsung Galaxy Book4 Ultra — Ubuntu 24.04 LTS, Kernel 6.17.0-14-generic (HWE)
 - Samsung Galaxy Book4 Ultra — Fedora 43, Kernel 6.18.9 (community-confirmed)
 - Samsung Galaxy Book5 Pro — Speaker fix works, mic continues to work (community-confirmed)
@@ -39,6 +40,7 @@ The upstream PR was also reported working on Galaxy Book4 Pro, Pro 360, and Pro 
 > **Fedora users:** The install script auto-detects Fedora (DNF) and configures DKMS module signing using the akmods MOK key. If no key exists, it generates one and prompts for enrollment.
 
 This affects systems with:
+
 - **HDA Codec**: Realtek ALC298 (subsystem ID `0x144dc1d8` or similar Samsung variants)
 - **Speaker Amps**: 4x Maxim MAX98390 connected via I2C (addresses `0x38`, `0x39`, `0x3c`, `0x3d`)
 - **Kernel**: 6.x series (tested on 6.17.0-14-generic, Ubuntu 24.04)
@@ -110,6 +112,7 @@ sudo reboot
 ```
 
 The install script will:
+
 1. Verify MAX98390 hardware is present (refuses to install on unsupported systems)
 2. Build the kernel modules via DKMS (auto-signs for Secure Boot if MOK keys are configured)
 3. Install systemd services and module autoload config
@@ -171,6 +174,7 @@ The MAX98390 draws ~10μA per chip in disabled state — effectively zero batter
 ### I2C Bus Detection
 
 The I2C setup script doesn't hardcode a bus number. It dynamically finds the correct bus by:
+
 1. Searching `/sys/bus/i2c/devices/` for any device matching `MAX98390`
 2. Following symlinks to find the parent I2C adapter
 3. Falling back to ACPI device path resolution
@@ -277,6 +281,7 @@ The [upstream kernel fix (PR #5616)](https://github.com/thesofproject/linux/pull
 ## Troubleshooting
 
 **Speakers not working after install + reboot?**
+
 ```bash
 # Check if modules loaded
 lsmod | grep max98390
@@ -323,6 +328,7 @@ sudo reboot
 > **Note:** The exact key paths vary by distro. Ubuntu typically uses `/var/lib/shim-signed/mok/MOK.priv` and `MOK.der`. Fedora uses `/etc/pki/akmods/private/private_key.priv` and `public_key.der`. Check which files exist on your system.
 
 **DKMS build fails on kernel update?**
+
 ```bash
 # Check if headers are installed for the new kernel
 sudo apt install linux-headers-$(uname -r)   # Ubuntu/Debian

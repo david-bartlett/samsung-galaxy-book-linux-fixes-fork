@@ -15,7 +15,7 @@
 **No git?** Download, install, and reboot in one step:
 
 ```bash
-curl -sL https://github.com/Andycodeman/samsung-galaxy-book4-linux-fixes/archive/refs/heads/main.tar.gz | tar xz && cd samsung-galaxy-book4-linux-fixes-main/webcam-fix && ./install.sh && sudo reboot
+curl -sL https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/archive/refs/heads/main.tar.gz | tar xz && cd samsung-galaxy-book-linux-fixes-main/webcam-fix && ./install.sh && sudo reboot
 ```
 
 **Already cloned?**

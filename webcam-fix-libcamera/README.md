@@ -15,7 +15,7 @@
 **No git?** Download, install, and reboot in one step:
 
 ```bash
-curl -sL https://github.com/Andycodeman/samsung-galaxy-book4-linux-fixes/archive/refs/heads/main.tar.gz | tar xz && cd samsung-galaxy-book4-linux-fixes-main/webcam-fix-libcamera && ./install.sh && sudo reboot
+curl -sL https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/archive/refs/heads/main.tar.gz | tar xz && cd samsung-galaxy-book-linux-fixes-main/webcam-fix-libcamera && ./install.sh && sudo reboot
 ```
 
 **Already cloned?**
@@ -100,6 +100,7 @@ The install script performs these steps:
 ## Supported Hardware
 
 This fix works for any laptop with:
+
 - Intel IPU6 on **Meteor Lake** (PCI ID `8086:7d19`) or **Raptor Lake** (PCI ID `8086:a75d`)
 - **OV02C10** camera sensor (`OVTI02C1`)
 - **Linux** with kernel 6.10+
@@ -127,6 +128,7 @@ This includes Samsung Galaxy Book3, Book4 Ultra, Book4 Pro, Book4 Pro 360, and p
 GNOME Cheese crashes with a segfault (`SIGSEGV` in `libgstvideoconvertscale.so`) when receiving frames from the v4l2loopback device. This is a Cheese/Clutter bug, not a camera issue.
 
 A standalone fix is available:
+
 ```bash
 cd camera-relay && ./cheese-fix.sh       # Install
 cd camera-relay && ./cheese-fix-uninstall.sh  # Uninstall
@@ -160,6 +162,7 @@ With `exclusive_caps=0` (the default), browsers work best using V4L2 directly th
 **Note:** The PipeWire camera flag (`chrome://flags/#enable-webrtc-pipewire-camera`) is **not recommended** — community testing found it can prevent Chromium browsers from seeing the camera, and Edge doesn't support it at all. Browsers work reliably through the V4L2 camera relay without this flag.
 
 Quick test:
+
 ```bash
 # PipeWire-native test
 gst-launch-1.0 libcamerasrc ! videoconvert ! autovideosink
@@ -191,6 +194,7 @@ The install script creates these files:
 | Initramfs entries | IVSC modules (Ubuntu: `/etc/initramfs-tools/modules`, Fedora: `/etc/dracut.conf.d/`, Arch: `/etc/mkinitcpio.conf.d/`) |
 
 Source-built libcamera (Ubuntu) also creates:
+
 | File | Purpose |
 |------|---------|
 | `/etc/profile.d/libcamera-ipa.sh` | IPA module path (login shells) |
@@ -220,11 +224,13 @@ Replace `/dev/video0` with your camera device (e.g. `/dev/video32` for the relay
 ### Camera not detected after reboot
 
 Check that IVSC modules loaded:
+
 ```bash
 lsmod | grep -E 'ivsc|mei.vsc'
 ```
 
 If missing, verify they're in the initramfs:
+
 ```bash
 # Ubuntu
 lsinitramfs /boot/initrd.img-$(uname -r) | grep -E "ivsc|mei.vsc"
@@ -245,6 +251,7 @@ to find — the installer now treats a module as present if it's built-in or
 discoverable via `modinfo`. If you still hit the warning and the camera works
 after a reboot, it's harmless; you can also re-run with `--skip-module-check`.
 To check what your kernel actually provides:
+
 ```bash
 find /lib/modules/$(uname -r) -iname '*vsc*'
 modinfo mei_vsc ivsc_csi ivsc_ace 2>&1 | head
@@ -254,6 +261,7 @@ grep -i vsc /lib/modules/$(uname -r)/modules.builtin
 ### "external clock 26000000 is not supported" in dmesg
 
 Some Galaxy Book3/Book4 Ultra models (Raptor Lake) have a 26 MHz external clock instead of the expected 19.2 MHz. The installer detects this automatically and offers to install the [DKMS-patched ov02c10 driver](../ov02c10-26mhz-fix/). If you skipped the prompt during install, run the fix manually:
+
 ```bash
 cd ov02c10-26mhz-fix && sudo ./install.sh
 ```
@@ -265,6 +273,7 @@ Log out and back in for the udev rules and WirePlumber config to take effect. Th
 ### Zoom / OBS / VLC don't see the camera
 
 Enable the on-demand camera relay:
+
 ```bash
 camera-relay enable-persistent
 ```
@@ -272,6 +281,7 @@ camera-relay enable-persistent
 ### Chromium browser doesn't show camera
 
 Chrome/Chromium/Brave/Edge see the camera through the **V4L2 camera relay**, not PipeWire. Make sure the relay is running:
+
 ```bash
 camera-relay status
 camera-relay enable-persistent --yes  # if not enabled
@@ -280,9 +290,11 @@ camera-relay enable-persistent --yes  # if not enabled
 **Keep `chrome://flags/#enable-webrtc-pipewire-camera` DISABLED.** On Ubuntu/Zorin (Noble) the PipeWire camera path goes through the system libcamera 0.2.0, which has no IPU6 support — enabling the flag makes Chrome use that broken path and bypass the working V4L2 relay entirely (the camera will *not* be found).
 
 If Chrome shows "camera not found" even with the relay streaming and the flag off: Chromium enumerates V4L2 cameras through **udev** and only lists devices whose `ID_V4L_CAPABILITIES` property contains `:capture:`. `v4l_id` tags the loopback once at device creation — before any capture format is negotiated — so the property can come up without `:capture:` and Chrome silently filters the device out (libcamera/PipeWire apps like Cheese and Firefox are unaffected, which is why they still work). The installer ships a udev rule (`/etc/udev/rules.d/70-camera-relay-capabilities.rules`) that forces the capture capability for the relay node. Check it with:
+
 ```bash
 udevadm info /dev/videoN | grep -i ID_V4L_CAPABILITIES   # the "Camera Relay" node
 ```
+
 After installing, **fully quit Chrome** (`pkill -9 -f chrome` — Chrome caches its device list and keeps a background process) before relaunching.
 
 ### Black screen in apps / "v4l2loopback ... não é um dispositivo de saída"
@@ -299,6 +311,7 @@ into it and apps show a black screen, often with
 `O dispositivo "/dev/videoN" não é um dispositivo de saída`.
 
 Check for it:
+
 ```bash
 lsmod | grep v4l2loopback
 cat /sys/module/v4l2loopback/parameters/exclusive_caps   # Y = wrong
@@ -320,6 +333,7 @@ is mounted upside-down, purple/magenta. You can tune the CCM yourself.
 
 The easy way — an interactive tuner that cycles through presets with a live
 preview and writes the one you pick to every copy of the tuning file:
+
 ```bash
 cd webcam-fix-libcamera
 ./tune-ccm.sh
@@ -336,9 +350,11 @@ Two things bite people here:
 1. **The tuning file is read once, when the camera is opened.** `camera-relay`
    and PipeWire keep a libcamera instance alive, so an edit isn't picked up until
    they're restarted (or you reboot):
+
    ```bash
    systemctl --user restart camera-relay.service pipewire.service wireplumber.service
    ```
+
    Then close and reopen the app you're testing with. `./tune-ccm.sh` does this
    for you.
 
@@ -349,19 +365,24 @@ Two things bite people here:
    `/usr/local/share/libcamera/ipa/simple/ov02c10.yaml`. Whichever libcamera is
    actually loaded reads *its own* copy — edit the wrong one and nothing changes.
    Check which file is in use:
+
    ```bash
    LIBCAMERA_LOG_LEVELS=IPAProxy:INFO cam -c1 -C1 2>&1 | grep -i "tuning file"
    ```
+
    Edit the path it prints, or edit both, or just use `./tune-ccm.sh` (it writes
    to all of them).
 
 If no matrix you try makes any difference and you also see this in the log:
+
 ```
 WARN IPASoft soft_simple.cpp:... IPASoft: Failed to create camera sensor helper for ov02c10
 ```
+
 then your libcamera doesn't have the OV02C10 sensor helper, so auto-exposure and
 auto-white-balance fall back to a generic path and the colours will be wrong no
 matter what the CCM says. Rebuild libcamera with the helper patched in:
+
 ```bash
 sudo ./install.sh --force-libcamera-rebuild
 ```
@@ -377,6 +398,7 @@ sudo ./install.sh --force-libcamera-rebuild
 > (`cam`, `qcam`, GNOME Snapshot, Chromium with the `enable-webrtc-pipewire-camera`
 > flag) are the exception and may still get the unpatched system libcamera on
 > those distros. To confirm the *relay* picked up the patched build:
+>
 > ```bash
 > camera-relay status
 > journalctl --user -u camera-relay -b | grep -i 'libcamera\|GStreamer plugin'
@@ -388,9 +410,11 @@ Opening the sensor directly with `cam`/`qcam` resets the V4L2 flip controls when
 it exits. A relay that's already streaming doesn't re-apply them, so on models
 with an inverted sensor (e.g. Galaxy Book3 Ultra 960XFH) the relay's image ends
 up upside-down until you restart it:
+
 ```bash
 systemctl --user restart camera-relay.service
 ```
+
 Avoid poking the camera with `cam`/`qcam` while the relay is running.
 
 ---
