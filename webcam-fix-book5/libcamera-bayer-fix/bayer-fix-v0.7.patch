@@ -29,7 +29,7 @@
 +	 * Strictly opt-in via env var and restricted to ov02e10, so
 +	 * other distros and other sensors are unaffected.
 +	 */
-+	if (sensor->model() == "ov02e10" || sensor->model() == "ov02c10") {
++	if (sensor->model() == "ov02e10") {
 +		const char *forceRot = std::getenv("LIBCAMERA_FORCE_OV02E10_ROTATION");
 +		if (forceRot && std::string(forceRot) == "180")
 +			combinedTransform_ = combinedTransform_ * Transform::Rot180;
