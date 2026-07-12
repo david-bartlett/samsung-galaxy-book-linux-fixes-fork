@@ -315,12 +315,12 @@ if ! $DKMS_26MHZ_INSTALLED; then
                 DKMS_TMP_DIR="/tmp/ov02c10-26mhz-fix"
                 rm -rf "$DKMS_TMP_DIR"
                 mkdir -p "$DKMS_TMP_DIR"
-                GITHUB_RAW="https://raw.githubusercontent.com/Andycodeman/samsung-galaxy-book4-linux-fixes/main/ov02c10-26mhz-fix"
+                GITHUB_RAW="https://raw.githubusercontent.com/Andycodeman/samsung-galaxy-book-linux-fixes/main/ov02c10-26mhz-fix"
                 for fname in install.sh ov02c10.c Makefile dkms.conf; do
                     if ! curl -fsSL "$GITHUB_RAW/$fname" -o "$DKMS_TMP_DIR/$fname"; then
                         echo "  ERROR: Failed to download $fname"
                         echo "         Please clone the full repo and try again:"
-                        echo "         git clone https://github.com/Andycodeman/samsung-galaxy-book4-linux-fixes.git"
+                        echo "         git clone https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes.git"
                         rm -rf "$DKMS_TMP_DIR"
                         break
                     fi
@@ -368,7 +368,7 @@ if ! $DKMS_26MHZ_INSTALLED; then
             else
                 echo "  ⚠ Could not locate fix installer. Continuing without the fix."
                 echo "    The camera will likely NOT work until this is resolved."
-                echo "    See: https://github.com/Andycodeman/samsung-galaxy-book4-linux-fixes/tree/main/ov02c10-26mhz-fix"
+                echo "    See: https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/tree/main/ov02c10-26mhz-fix"
             fi
         else
             echo "  ⚠ Skipping 26 MHz fix. The camera will likely NOT work without it."
@@ -534,7 +534,7 @@ if $NEEDS_ROTATION_FIX; then
         IPU_BRIDGE_DIR="/tmp/ipu-bridge-fix"
         rm -rf "$IPU_BRIDGE_DIR"
         mkdir -p "$IPU_BRIDGE_DIR"
-        GITHUB_RAW="https://raw.githubusercontent.com/Andycodeman/samsung-galaxy-book4-linux-fixes/main/webcam-fix-book5/ipu-bridge-fix"
+        GITHUB_RAW="https://raw.githubusercontent.com/Andycodeman/samsung-galaxy-book-linux-fixes/main/webcam-fix-book5/ipu-bridge-fix"
         for fname in ipu-bridge.c Makefile dkms.conf; do
             if ! curl -fsSL "$GITHUB_RAW/$fname" -o "$IPU_BRIDGE_DIR/$fname"; then
                 echo "  ERROR: Failed to download $fname"
