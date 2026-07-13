@@ -696,14 +696,33 @@ echo "  ✓ Created /etc/profile.d/libcamera-ipa.sh"
 # service unit, but the PipeWire-libcamera path (used by apps that pick that
 # source directly) needs it too — so set it globally for all user services /
 # sessions. Book5 Pro ships in RTX dGPU configurations. (issues #15, #50, #70)
-if [[ -d /proc/driver/nvidia ]] || lspci 2>/dev/null | grep -qi 'VGA.*NVIDIA\|3D controller.*NVIDIA'; then
-    # Don't override if prime-select explicitly puts Intel in charge.
-    if ! { command -v prime-select >/dev/null 2>&1 && [[ "$(prime-select query 2>/dev/null)" == "intel" ]]; }; then
-        sudo mkdir -p /etc/environment.d
-        echo "LIBCAMERA_SOFTISP_MODE=cpu" | \
-            sudo tee /etc/environment.d/10-libcamera-softisp.conf > /dev/null
-        echo "  ✓ NVIDIA GPU detected — set LIBCAMERA_SOFTISP_MODE=cpu globally (CPU debayer)"
+# Only force CPU debayer when NVIDIA is the *active EGL renderer* — merely having
+# an NVIDIA card present is not enough. On a hybrid laptop rendering on the Intel
+# iGPU, EGL never touches the NVIDIA driver, so GPU debayer works fine and forcing
+# CPU costs a large chunk of framerate for nothing (issue #66). `prime-select` is
+# Ubuntu-only, so it can't be the sole guard. This mirrors camera-relay's own
+# detection — keep the two in sync.
+NVIDIA_ACTIVE=""
+if command -v glxinfo >/dev/null 2>&1; then
+    # glxinfo is authoritative: it reports the renderer actually in use.
+    if glxinfo 2>/dev/null | grep -qi "opengl renderer.*nvidia"; then
+        NVIDIA_ACTIVE="yes"
     fi
+elif [[ -d /proc/driver/nvidia ]] || lspci 2>/dev/null | grep -qi 'VGA.*NVIDIA\|3D controller.*NVIDIA'; then
+    # No glxinfo — fall back to presence, unless prime-select puts Intel in charge.
+    if ! { command -v prime-select >/dev/null 2>&1 && [[ "$(prime-select query 2>/dev/null)" == "intel" ]]; }; then
+        NVIDIA_ACTIVE="maybe"
+    fi
+fi
+if [[ -n "$NVIDIA_ACTIVE" ]]; then
+    sudo mkdir -p /etc/environment.d
+    echo "LIBCAMERA_SOFTISP_MODE=cpu" | \
+        sudo tee /etc/environment.d/10-libcamera-softisp.conf > /dev/null
+    echo "  ✓ NVIDIA is the active renderer — set LIBCAMERA_SOFTISP_MODE=cpu globally (CPU debayer)"
+    [[ "$NVIDIA_ACTIVE" == "maybe" ]] && \
+        echo "    (couldn't confirm via glxinfo — install mesa-utils/glx-utils if your camera framerate is low)"
+else
+    sudo rm -f /etc/environment.d/10-libcamera-softisp.conf
 fi
 
 # ──────────────────────────────────────────────
