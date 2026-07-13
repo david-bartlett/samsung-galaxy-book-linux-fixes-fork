@@ -39,6 +39,38 @@ devm_v4l2_sensor_clk_get(struct device *dev, const char *id)
 #define OV02C10_MCLK_26MHZ		26000000
 #define OV02C10_RGB_DEPTH		10
 
+/*
+ * PLL registers. The mode register lists set 0x0303 (divider) and the 16-bit
+ * multiplier 0x0304:0x0305, and were computed upstream for a 19.2MHz MCLK.
+ * This DKMS package widens the clock-acceptance check to allow 26MHz boards
+ * (Raptor Lake) but does NOT re-time the PLL — so on those boards the whole
+ * sensor clock tree runs 26/19.2 = ~1.354x fast: ~40.7fps instead of 30, and
+ * the link_freq/pixel_rate we advertise to libcamera no longer match reality,
+ * which makes AGC mis-compute exposure. See issue #71.
+ *
+ * These parameters exist to find the correct 26MHz multiplier empirically,
+ * without a datasheet. Both default to -1 = "leave the mode's values alone",
+ * so the driver's behaviour is unchanged unless you opt in.
+ *
+ *   modprobe ov02c10 pll_mult=295
+ *
+ * If frame rate scales inversely with pll_mult, 0x0304:0x0305 is confirmed as
+ * the multiplier, and the right value for a 26MHz board is the one that lands
+ * at 30fps (predicted: 400 * 19.2/26 ~= 295).
+ */
+#define OV02C10_REG_PLL_DIV		CCI_REG8(0x0303)
+#define OV02C10_REG_PLL_MULT		CCI_REG16(0x0304)
+
+static int pll_mult = -1;
+module_param(pll_mult, int, 0644);
+MODULE_PARM_DESC(pll_mult,
+	"Override PLL multiplier (0x0304:0x0305). -1 = use the mode's value (default). Experimental, see issue #71.");
+
+static int pll_div = -1;
+module_param(pll_div, int, 0644);
+MODULE_PARM_DESC(pll_div,
+	"Override PLL divider (0x0303). -1 = use the mode's value (default). Experimental, see issue #71.");
+
 #define OV02C10_REG_CHIP_ID		CCI_REG16(0x300a)
 #define OV02C10_CHIP_ID			0x5602
 
@@ -628,6 +660,31 @@ static int ov02c10_enable_streams(struct v4l2_subdev *sd,
 		dev_err(ov02c10->dev, "failed to write lane settings\n");
 		goto out;
 	}
+
+	/*
+	 * Experimental PLL re-timing (issue #71). Applied last so it overrides
+	 * whatever the mode/lane lists just wrote. Off by default.
+	 */
+	if (pll_div >= 0) {
+		ret = cci_write(ov02c10->regmap, OV02C10_REG_PLL_DIV,
+				pll_div, NULL);
+		if (ret) {
+			dev_err(ov02c10->dev, "failed to write pll_div\n");
+			goto out;
+		}
+	}
+	if (pll_mult >= 0) {
+		ret = cci_write(ov02c10->regmap, OV02C10_REG_PLL_MULT,
+				pll_mult, NULL);
+		if (ret) {
+			dev_err(ov02c10->dev, "failed to write pll_mult\n");
+			goto out;
+		}
+	}
+	if (pll_div >= 0 || pll_mult >= 0)
+		dev_info(ov02c10->dev,
+			 "PLL override active: div=%d mult=%d (experimental, issue #71)\n",
+			 pll_div, pll_mult);
 
 	ret = __v4l2_ctrl_handler_setup(ov02c10->sd.ctrl_handler);
 	if (ret)
