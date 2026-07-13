@@ -90,7 +90,7 @@ The internal speakers use 4x Maxim MAX98390 I2C amplifiers that have no kernel d
 
 > **Sound Quality:** Audio will sound thinner and lack bass compared to Windows. This is because Windows uses Samsung's DSP audio processing (Dolby Atmos, bass enhancement, EQ) which Linux doesn't have. See [Sound Quality & EQ](speaker-fix/README.md#sound-quality--eq) for details and a workaround using EasyEffects.
 
-> **Battery Impact:** The speaker amps are only powered on during active audio playback — when idle, they draw ~10μA per chip (effectively zero battery impact). The driver uses HDA playback hooks to enable the amps on demand.
+> **Battery Impact:** The speaker amps are enabled when the driver probes and stay on — they are **not** powered down when idle. The driver implements an HDA playback hook for on-demand power, but it never fires: it needs an in-kernel alc269 quirk that doesn't exist for these boards, so the HDA component never binds. Enabling the amps at probe is what makes the speakers work at all. See [`speaker-fix/README.md`](speaker-fix/README.md#power-management) for the full explanation.
 
 > **Secure Boot:** Most laptops have Secure Boot enabled. If you've never installed a DKMS/out-of-tree kernel module before, you'll need to do a **one-time MOK key enrollment** (reboot + blue screen + password) before the modules will load. See the [full walkthrough](speaker-fix/README.md#secure-boot-setup).
 
@@ -228,7 +228,7 @@ The upstream speaker PR (#5616) was also confirmed working on Galaxy Book4 Pro, 
 Thanks to the following users for their contributions and testing:
 
 - **[@jn-simonnet](https://github.com/jn-simonnet)** and **[@david-bartlett](https://github.com/david-bartlett)** — Extensive testing across multiple Galaxy Book models, kernels, and distros that helped identify and resolve numerous issues
-- **[@MatiDegli](https://github.com/MatiDegli)** — Created [speaker-on/off/status helper scripts](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/discussions/4) for manually toggling the speaker fix on and off. Note: the driver already powers down the amps when idle, so this isn't needed for battery savings, but may be useful if you want to explicitly unload the modules. Community-contributed and not officially tested — use at your own discretion.
+- **[@MatiDegli](https://github.com/MatiDegli)** — Created [speaker-on/off/status helper scripts](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/discussions/4) for manually toggling the speaker fix on and off. These are genuinely useful for battery: the driver enables the amps at probe and never powers them down (the HDA playback hook can't fire without the missing alc269 quirk), so unloading the modules is currently the only way to switch the amps off. Community-contributed and not officially tested — use at your own discretion.
 - **[@pagliarinilucas](https://github.com/pagliarinilucas)** — NixOS module for the speaker fix (declarative kernel module build + I2C device setup). See [`nixos/`](nixos/).
 - **[@derwismtz](https://github.com/derwismtz)** — Tireless testing and Windows trace work that made the Book3 Pro 14" (NP940XFG) speaker fix possible. See [`speaker-fix-940xfg/`](speaker-fix-940xfg/) and [#44](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/44).
 
