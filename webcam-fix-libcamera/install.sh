@@ -1384,7 +1384,28 @@ if [[ -d "$RELAY_DIR" ]]; then
         echo "  Installing v4l2loopback..."
         case "$DISTRO" in
             fedora)
-                sudo dnf install -y v4l2loopback 2>/dev/null || true
+                # Fedora doesn't ship v4l2loopback in main repos — it lives in
+                # RPM Fusion (free) as `akmod-v4l2loopback` (auto-builds against
+                # the running kernel). Enable the repo if needed, then install.
+                if ! dnf repolist --enabled 2>/dev/null | grep -qE '^rpmfusion-free(\s|$)'; then
+                    FEDORA_VER=$(rpm -E %fedora 2>/dev/null || true)
+                    if [[ -n "$FEDORA_VER" ]]; then
+                        echo "  Enabling RPM Fusion (free) — required for akmod-v4l2loopback..."
+                        sudo dnf install -y \
+                            "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-${FEDORA_VER}.noarch.rpm" \
+                            || echo "  ⚠ Could not enable RPM Fusion automatically — see fallback hint below."
+                    fi
+                fi
+                # akmod auto-builds against running kernel and needs matching kernel headers.
+                sudo dnf install -y akmod-v4l2loopback kernel-devel-"$(uname -r)" 2>/dev/null \
+                    || sudo dnf install -y akmod-v4l2loopback kernel-devel 2>/dev/null \
+                    || true
+                # Trigger immediate build so the module is usable without a reboot.
+                if command -v akmods &>/dev/null; then
+                    echo "  Building v4l2loopback akmod against current kernel (this may take a minute)..."
+                    sudo akmods --force 2>/dev/null || true
+                    sudo depmod -a 2>/dev/null || true
+                fi
                 ;;
             arch)
                 sudo pacman -S --needed --noconfirm v4l2loopback-dkms 2>/dev/null || true
@@ -1393,6 +1414,20 @@ if [[ -d "$RELAY_DIR" ]]; then
                 sudo apt-get install -y v4l2loopback-dkms 2>/dev/null || true
                 ;;
         esac
+
+        # Re-check that the module is now installed; warn loudly if not.
+        # Without this the relay crash-loops forever and the only symptom the
+        # user sees is "the browser can't find my camera". (issue #51)
+        if ! modinfo v4l2loopback &>/dev/null 2>&1; then
+            echo "  ⚠ v4l2loopback kernel module still not available after install attempt."
+            if [[ "$DISTRO" == "fedora" ]]; then
+                echo "    On Fedora, ensure RPM Fusion (free) is enabled, then run:"
+                echo "      sudo dnf install -y https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-\$(rpm -E %fedora).noarch.rpm"
+                echo "      sudo dnf install -y akmod-v4l2loopback kernel-devel"
+                echo "      sudo akmods --force && sudo depmod -a"
+            fi
+            echo "    Camera relay will not function until v4l2loopback is available."
+        fi
     fi
 
     # ---------------------------------------------------------------
