@@ -60,16 +60,29 @@ devm_v4l2_sensor_clk_get(struct device *dev, const char *id)
  */
 #define OV02C10_REG_PLL_DIV		CCI_REG8(0x0303)
 #define OV02C10_REG_PLL_MULT		CCI_REG16(0x0304)
+#define OV02C10_REG_PLL2_MULT		CCI_REG8(0x0316)
 
+/*
+ * Testing on a 26MHz board (issue #71) showed 0x0304:0x0305 is the *MIPI/link*
+ * PLL, not the pixel PLL: sweeping it 400 -> 295 left the frame rate pinned at
+ * 40.70fps, while values below ~64 (in 0x0305) starved the CSI-2 link — first
+ * corrupting frames, then stopping them entirely. Frame timing is therefore
+ * driven by the other multiplier the mode list writes, 0x0316 (also 0x90).
+ */
 static int pll_mult = -1;
 module_param(pll_mult, int, 0644);
 MODULE_PARM_DESC(pll_mult,
-	"Override PLL multiplier (0x0304:0x0305). -1 = use the mode's value (default). Experimental, see issue #71.");
+	"Override MIPI/link PLL multiplier (0x0304:0x0305). -1 = use the mode's value (default). Does NOT affect frame rate. Experimental, see issue #71.");
 
 static int pll_div = -1;
 module_param(pll_div, int, 0644);
 MODULE_PARM_DESC(pll_div,
 	"Override PLL divider (0x0303). -1 = use the mode's value (default). Experimental, see issue #71.");
+
+static int pll2_mult = -1;
+module_param(pll2_mult, int, 0644);
+MODULE_PARM_DESC(pll2_mult,
+	"Override system/pixel PLL multiplier (0x0316). -1 = use the mode's value (default, 0x90=144). This is the one that should drive frame rate. Experimental, see issue #71.");
 
 #define OV02C10_REG_CHIP_ID		CCI_REG16(0x300a)
 #define OV02C10_CHIP_ID			0x5602
@@ -681,10 +694,18 @@ static int ov02c10_enable_streams(struct v4l2_subdev *sd,
 			goto out;
 		}
 	}
-	if (pll_div >= 0 || pll_mult >= 0)
+	if (pll2_mult >= 0) {
+		ret = cci_write(ov02c10->regmap, OV02C10_REG_PLL2_MULT,
+				pll2_mult, NULL);
+		if (ret) {
+			dev_err(ov02c10->dev, "failed to write pll2_mult\n");
+			goto out;
+		}
+	}
+	if (pll_div >= 0 || pll_mult >= 0 || pll2_mult >= 0)
 		dev_info(ov02c10->dev,
-			 "PLL override active: div=%d mult=%d (experimental, issue #71)\n",
-			 pll_div, pll_mult);
+			 "PLL override active: div=%d mult=%d pll2_mult=%d (experimental, issue #71)\n",
+			 pll_div, pll_mult, pll2_mult);
 
 	ret = __v4l2_ctrl_handler_setup(ov02c10->sd.ctrl_handler);
 	if (ret)
