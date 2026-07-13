@@ -204,6 +204,7 @@ echo "  ✓ Camera relay tool removed"
 echo "[11/11] Removing environment configuration..."
 sudo rm -f /etc/environment.d/libcamera-ipa.conf
 sudo rm -f /etc/profile.d/libcamera-ipa.sh
+sudo rm -f /etc/environment.d/10-libcamera-softisp.conf
 echo "  ✓ Removed libcamera environment files"
 
 echo ""

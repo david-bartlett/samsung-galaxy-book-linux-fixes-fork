@@ -689,6 +689,23 @@ EOF
 fi
 echo "  ✓ Created /etc/profile.d/libcamera-ipa.sh"
 
+# If an NVIDIA GPU is present, libcamera's GPU (EGL) debayer is unreliable
+# (debayer_egl.cpp is incompatible with NVIDIA's proprietary EGL driver, and on
+# hybrid laptops EGL may pick the NVIDIA renderer even when the iGPU is active)
+# and produces black frames. camera-relay already forces CPU debayer on its own
+# service unit, but the PipeWire-libcamera path (used by apps that pick that
+# source directly) needs it too — so set it globally for all user services /
+# sessions. Book5 Pro ships in RTX dGPU configurations. (issues #15, #50, #70)
+if [[ -d /proc/driver/nvidia ]] || lspci 2>/dev/null | grep -qi 'VGA.*NVIDIA\|3D controller.*NVIDIA'; then
+    # Don't override if prime-select explicitly puts Intel in charge.
+    if ! { command -v prime-select >/dev/null 2>&1 && [[ "$(prime-select query 2>/dev/null)" == "intel" ]]; }; then
+        sudo mkdir -p /etc/environment.d
+        echo "LIBCAMERA_SOFTISP_MODE=cpu" | \
+            sudo tee /etc/environment.d/10-libcamera-softisp.conf > /dev/null
+        echo "  ✓ NVIDIA GPU detected — set LIBCAMERA_SOFTISP_MODE=cpu globally (CPU debayer)"
+    fi
+fi
+
 # ──────────────────────────────────────────────
 # [11/15] Hide raw IPU7 V4L2 nodes from PipeWire
 # ──────────────────────────────────────────────
