@@ -278,6 +278,36 @@ Enable the on-demand camera relay:
 camera-relay enable-persistent
 ```
 
+### Firefox: `NotAllowedError` on every camera request (stale portal permission)
+
+Only affects you if you've set `media.webrtc.camera.allow-pipewire = true` in `about:config`.
+Firefox then fails on *every* camera request with `NotAllowedError`, while other apps (Chrome, OBS)
+work fine.
+
+Cause: a stale **"denied"** entry for Firefox in the xdg-desktop-portal permission store, left
+behind when the portal crashed mid-negotiation (e.g. the glib2 `g_weak_ref_get` race in
+xdg-desktop-portal 1.21.0 on Fedora 44). The denial persists and silently blocks every later
+request, even once the portal itself is fixed.
+
+```bash
+# Check — look for "org.mozilla.firefox" 1 "no"
+busctl call --user org.freedesktop.impl.portal.PermissionStore \
+  /org/freedesktop/impl/portal/PermissionStore \
+  org.freedesktop.impl.portal.PermissionStore \
+  Lookup ss "devices" "camera"
+
+# Fix, then restart Firefox
+busctl call --user org.freedesktop.impl.portal.PermissionStore \
+  /org/freedesktop/impl/portal/PermissionStore \
+  org.freedesktop.impl.portal.PermissionStore \
+  DeletePermission sss "devices" "camera" "org.mozilla.firefox"
+```
+
+If you don't specifically need the PipeWire path, setting
+`media.webrtc.camera.allow-pipewire = false` avoids this entirely — Firefox then uses the V4L2
+camera relay, which needs no flags. Thanks to
+[@david-bartlett](https://github.com/david-bartlett) ([#37](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/37)).
+
 ### Chromium browser doesn't show camera
 
 Chrome/Chromium/Brave/Edge see the camera through the **V4L2 camera relay**, not PipeWire. Make sure the relay is running:

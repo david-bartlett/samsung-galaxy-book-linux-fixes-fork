@@ -202,6 +202,47 @@ media.navigator.video.default_width = 1920
 media.navigator.video.default_height = 1080
 ```
 
+#### Firefox: `NotAllowedError` on every camera request (stale portal permission)
+
+If you've set `media.webrtc.camera.allow-pipewire = true` and Firefox then fails on *every*
+camera request with:
+
+```
+NotAllowedError: The request is not allowed by the user agent or the platform in the current context.
+```
+
+…while other apps (Chrome, OBS) have camera access fine, you have a **stale "denied" entry** for
+Firefox in the xdg-desktop-portal permission store. It gets left behind when the portal crashes
+mid-negotiation (e.g. the glib2 `g_weak_ref_get` race in xdg-desktop-portal 1.21.0 on Fedora 44):
+the permission grant fails and is recorded as a *denial*, which then silently blocks every future
+request — even after the portal is fixed.
+
+Check for it:
+
+```bash
+busctl call --user org.freedesktop.impl.portal.PermissionStore \
+  /org/freedesktop/impl/portal/PermissionStore \
+  org.freedesktop.impl.portal.PermissionStore \
+  Lookup ss "devices" "camera"
+```
+
+If you see `"org.mozilla.firefox" 1 "no"` in the output, delete it:
+
+```bash
+busctl call --user org.freedesktop.impl.portal.PermissionStore \
+  /org/freedesktop/impl/portal/PermissionStore \
+  org.freedesktop.impl.portal.PermissionStore \
+  DeletePermission sss "devices" "camera" "org.mozilla.firefox"
+```
+
+Restart Firefox; it will prompt for camera access on the next request and grant it normally. No
+restart of xdg-desktop-portal is needed.
+
+*Note:* if you don't specifically need the PipeWire path, setting
+`media.webrtc.camera.allow-pipewire = false` also avoids this entirely — Firefox will then use the
+V4L2 camera relay, which needs no flags. Thanks to
+[@david-bartlett](https://github.com/david-bartlett) ([#37](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/37)).
+
 **Chrome / Chromium / Edge:** These browsers work via the V4L2 camera relay without any special flags. Make sure the relay is running:
 ```bash
 camera-relay status
