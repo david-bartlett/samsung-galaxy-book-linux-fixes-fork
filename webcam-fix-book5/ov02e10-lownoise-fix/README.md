@@ -1,116 +1,127 @@
-# OV02E10 low-light test — does more exposure kill the vertical lines?
+# OV02E10 low-noise fix — vertical banding in low light
 
-**Experimental. Not part of any install. Not a fix — a test.** See
-[#67](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/67).
+Fixes the **fixed vertical stripes** Galaxy Book5 (OV02E10) users see in dim
+rooms. See [#67](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/67).
 
-## The question
+**Opt-in.** This is not run by `webcam-fix-book5/install.sh` — it replaces the
+in-tree sensor driver, and it costs a little SNR. Install it only if the banding
+bothers you.
 
-Book5 (OV02E10) users see **vertical stripes in low light**. That's column
-fixed-pattern noise in the sensor's analog readout, and it scales with **analog
-gain**. In a dim room AGC pegs at the sensor's maximum gain (**15.5×**) — because
-it has already run out of *exposure time* — so the FPN gets amplified fifteenfold.
+## What's actually wrong
 
-Exposure is capped at `vts_def - 2` = **2242 lines**. If we raise that ceiling,
-AGC should be able to hold the shutter open longer and use **less gain** — which
-should make the stripes recede. This module exists to find out whether that's true.
+The stripes are **column fixed-pattern noise** in the sensor's *analog* readout —
+a small fixed offset that differs from column to column. It is amplified by
+**analog gain**, and in a dim room libcamera's AGC drives analog gain to its
+**15.5× maximum**, so the FPN gets amplified fifteenfold and the columns become
+visible bands.
 
-## Why it needs a kernel module at all
+You cannot fix this in userspace, and it's worth being explicit about why, because
+several plausible-looking routes are dead ends:
 
-You cannot do this from userspace. Setting `V4L2_CID_VBLANK` with `v4l2-ctl` gets
-wiped the instant a camera opens, and even if it didn't, it wouldn't help:
+- **`tune-ccm.sh` / the tuning YAML can't touch it.** libcamera's SoftISP
+  algorithms are `BlackLevel`, `Awb`, `Ccm`, `Adjust`, `Agc`. There is no
+  per-column stage anywhere, and `BlackLevel` is a single *global* offset. A
+  colour matrix cannot express "column 417 reads 3 LSBs high."
+- **You can't ask AGC to use less gain.** The soft AGC (`agc.cpp`) is 174 lines of
+  hardcoded constants — no tunable target, no gain limit, nothing the tuning file
+  reaches. It will chase its brightness target to whatever maximum gain the sensor
+  advertises.
+- **You can't raise the exposure ceiling from userspace either.** Setting
+  `V4L2_CID_VBLANK` with `v4l2-ctl` gets wiped the moment a camera opens: the
+  driver resets VBLANK to the mode default on every `set_fmt`, and libcamera calls
+  `setFormat()` during `configure()`. Even if you won that race, the soft IPA
+  caches `exposureMax` at `configure()` time (`soft_simple.cpp:217`) and ignores
+  later changes.
 
-- The stock driver **resets VBLANK to the mode default on every `set_fmt`**
-  (`__v4l2_ctrl_modify_range(..., vblank_def)`), and libcamera calls `setFormat()`
-  during `configure()`.
-- libcamera's **simple pipeline never touches VBLANK** and has no frame-duration
-  control.
-- libcamera's soft IPA **caches `exposureMax` at `configure()` time**
-  (`soft_simple.cpp:217`), so a later VBLANK change is ignored anyway.
+So the sensor driver is the only place this can be fixed.
 
-So the mode's VTS has to be bigger *before* libcamera configures. Hence a module
-parameter.
+## The fix
 
-## Build and run
+libcamera's soft IPA reads `againMax` straight out of the **V4L2 control range**
+(`soft_simple.cpp:224`). So the driver's gain ceiling *is* AGC's gain ceiling.
 
-```bash
-make
-sudo rmmod ov02e10
-sudo insmod ./ov02e10.ko vts=4488
-```
+- **Cap analog gain** at 4× (`max_again=64`). AGC can no longer amplify the column
+  FPN fifteenfold.
+- **Make the brightness back up with digital gain** (`dgain=1020`, ~4×). Digital
+  gain amplifies signal and noise *together*, downstream of the analog column
+  chain, so it does not bring the bands back.
 
-`vts=0` (the default) is stock behaviour, byte-for-byte. Nothing changes unless
-you opt in.
+Net: **~16× total gain — the same overall brightness as stock — with the banding
+gone.**
 
-| `vts` | frame rate | exposure ceiling |
-|-------|-----------|------------------|
-| 2244 (stock) | 30.0 fps | 2242 lines (33.3 ms) |
-| 3366 | 20.0 fps | 3364 lines (49.9 ms) |
-| 4488 | 15.0 fps | 4486 lines (66.5 ms) |
+## Why we know it's a real fix and not just a darker picture
 
-Frame rate is `SCLK / (hts × vts)` = `36 MHz / (534 × vts)`.
+This was the obvious trap: capping analog gain also *dims* the image, and a darker
+picture hides noise for free. So it was tested at **matched brightness**
+(940XHA, #67):
 
-### Result: `vts` alone is not enough
+| config | analog | digital | brightness | result |
+|---|---|---|---|---|
+| stock | 15.5× | 1× | normal | **heavy vertical banding** |
+| `max_again=64` | 4× | 1× | dark | bands gone — but is it just the darkness? |
+| `max_again=64 dgain=1020` | 4× | 4× | **normal** | **bands still gone** ✅ |
 
-Tested on 940XHA (#67). At `vts=4488` — 15 fps, a **doubled** 66.5 ms exposure
-window — AGC consumed the entire window and *still* settled at `analogue_gain =
-248`, the 15.5× maximum. So in a genuinely dim scene, twice the exposure does not
-buy enough light to let AGC back off. The exposure lever, on its own, is exhausted.
+The third row is the one that matters. At the same brightness as stock, the bands
+do not come back. The FPN is genuinely amplified by the *analog* gain path, and
+moving amplification to digital sidesteps it.
 
-## Second lever: `max_again`
-
-Since AGC won't voluntarily use less gain, take the choice away from it.
-
-libcamera's soft IPA reads `againMax` straight out of the V4L2 control range at
-`configure()` time (`soft_simple.cpp:224`), and its AGC has **no tunable target and
-no gain limit of its own** — `agc.cpp` is 174 lines of hardcoded constants, and
-nothing in the tuning YAML reaches it. So the driver's gain ceiling *is* AGC's gain
-ceiling.
-
-```bash
-sudo rmmod ov02e10
-sudo insmod ./ov02e10.ko vts=4488 max_again=64    # 15fps, gain capped at 4x
-```
-
-| `max_again` | gain cap |
-|---|---|
-| 248 (stock) | 15.5× |
-| 96 | 6× |
-| 64 | 4× |
-| 32 | 2× |
-
-## The measurement
-
-In the **same dim scene** each time, open the camera and read back what AGC
-settles on:
+## Install
 
 ```bash
-v4l2-ctl -d /dev/v4l-subdev4 --get-ctrl=analogue_gain,exposure
+sudo ./install.sh
+sudo reboot
 ```
 
-(Your subdev number may differ — find it with `v4l2-ctl --list-devices`.)
+The driver's own defaults are **stock** — installing it changes nothing on its
+own. The low-noise profile is enabled by the modprobe.d file the installer writes:
 
-This is the experiment that decides whether anything is fixable here:
+```
+# /etc/modprobe.d/99-ov02e10-lownoise.conf
+options ov02e10 max_again=64 dgain=1020
+```
 
-- **The stripes recede and the image is merely darker** → the FPN *is*
-  gain-amplified, a cap is a real mitigation, and we can ship it as an opt-in
-  low-noise mode (optionally clawing brightness back with digital gain, which
-  amplifies signal and noise equally and so doesn't reintroduce the stripes).
-- **The image just gets darker and the stripes stay in proportion** → this is
-  plain low-light SNR: the FPN is fixed, the signal is small, and gain isn't the
-  culprit — it's merely the messenger. In that case *no* gain or exposure setting
-  will ever help, and the only real fix is a per-column correction stage in
-  libcamera's SoftISP. That does not exist today (its algorithms are `BlackLevel`,
-  `Awb`, `Ccm`, `Adjust`, `Agc`, and `BlackLevel` is a single **global** offset,
-  not per-column), so it would be upstream work.
+Comment that line out to return to stock behaviour without uninstalling.
 
-Both outcomes are worth knowing, and the second one is a legitimate answer. Report
-the `analogue_gain` value and whether the stripes changed — that *is* the experiment.
+## Verify
 
-## Restore
+In a **dim** room:
 
 ```bash
-sudo rmmod ov02e10 && sudo modprobe ov02e10
+v4l2-ctl -d /dev/v4l-subdev4 --get-ctrl=analogue_gain,digital_gain
 ```
 
-The stock in-tree driver comes back. This module is never installed, never
-DKMS-registered, and doesn't survive a reboot.
+Expect `analogue_gain=64` (not 248) and `digital_gain=1020`. If analog gain is
+still 248, the module parameters aren't being applied — check that
+`modinfo ov02e10 | grep filename` points at `/updates/`.
+
+## Parameters
+
+| param | default | meaning |
+|---|---|---|
+| `max_again` | 0 (stock, 248 = 15.5×) | Cap analog gain. `64` = 4×, `96` = 6×, `32` = 2×. |
+| `dgain` | 0 (stock, 256 = 1×) | Digital gain. `1020` ≈ 4×. |
+| `vts` | 0 (stock, 2244 = 30fps) | Frame length. Raises the exposure ceiling at the cost of frame rate. |
+
+### A note on `vts`
+
+`vts` is kept because it's useful for diagnosis, but **it does not fix the banding
+on its own** — that was tested. At `vts=4488` (15 fps, a *doubled* 66.5 ms exposure
+window) AGC simply consumed the whole window and still went to maximum gain. Twice
+the light isn't enough in a genuinely dim room. Don't reach for it expecting a fix.
+
+## Uninstall
+
+```bash
+sudo ./uninstall.sh
+sudo reboot
+```
+
+Removes the DKMS module and the modprobe.d profile; the in-tree driver takes over
+again.
+
+## Credits
+
+Diagnosed and confirmed on hardware by
+[@hatchlof](https://github.com/hatchlof) ([#67](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/67)),
+who ran the controls that ruled out the sensor-helper theory, the CCM theory, the
+exposure theory, and finally the "it's just darker" theory.
