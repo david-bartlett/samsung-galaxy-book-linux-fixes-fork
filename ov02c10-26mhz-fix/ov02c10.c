@@ -84,6 +84,52 @@ module_param(pll2_mult, int, 0644);
 MODULE_PARM_DESC(pll2_mult,
 	"Override system/pixel PLL multiplier (0x0316). -1 = use the mode's value (default, 0x90=144). This is the one that should drive frame rate. Experimental, see issue #71.");
 
+/*
+ * Low-noise profile — the same fix confirmed on the sibling OV02E10 in #67.
+ *
+ * In a dim room libcamera's AGC drives ANALOG gain to its 15.5x maximum, which
+ * amplifies the sensor's column fixed-pattern noise along with the signal. On
+ * OV02E10 that shows up as vertical banding; here it is more likely to read as
+ * general "dancing" noise and grain.
+ *
+ * The soft IPA reads againMax straight out of this V4L2 control's range at
+ * configure() time (soft_simple.cpp:224), and its AGC has no tunable target and
+ * no gain limit of its own — so the driver's gain ceiling IS AGC's gain ceiling.
+ * Cap analog gain, then make the brightness back up with DIGITAL gain, which
+ * amplifies signal and noise together downstream of the analog column chain and
+ * so does not reintroduce the noise it was hiding.
+ *
+ * Verified at matched brightness on OV02E10 (#67): 4x analog + 4x digital gives
+ * the same overall brightness as 15.5x analog, with the FPN gone.
+ *
+ * Both default to 0 = stock, so nothing changes unless you opt in.
+ *
+ *   modprobe ov02c10 max_again=64 dgain=4096      # 4x analog, 4x digital
+ */
+static int max_again;
+module_param(max_again, int, 0644);
+MODULE_PARM_DESC(max_again,
+	"Cap analog gain in raw units (16=1x, 64=4x, 248=15.5x). 0 = stock (248). See issue #67.");
+
+static int dgain;
+module_param(dgain, int, 0644);
+MODULE_PARM_DESC(dgain,
+	"Default digital gain (1024=1x, 4096=4x). 0 = stock (1024). Use with max_again to restore brightness. See issue #67.");
+
+static u32 ov02c10_again_max(void)
+{
+	if (max_again >= OV02C10_ANAL_GAIN_MIN && max_again <= OV02C10_ANAL_GAIN_MAX)
+		return max_again;
+	return OV02C10_ANAL_GAIN_MAX;
+}
+
+static u32 ov02c10_dgain_default(void)
+{
+	if (dgain >= OV02C10_DGTL_GAIN_MIN && dgain <= OV02C10_DGTL_GAIN_MAX)
+		return dgain;
+	return OV02C10_DGTL_GAIN_DEFAULT;
+}
+
 #define OV02C10_REG_CHIP_ID		CCI_REG16(0x300a)
 #define OV02C10_CHIP_ID			0x5602
 
@@ -655,11 +701,11 @@ static int ov02c10_init_controls(struct ov02c10 *ov02c10)
 		ov02c10->hblank->flags |= V4L2_CTRL_FLAG_READ_ONLY;
 
 	v4l2_ctrl_new_std(ctrl_hdlr, &ov02c10_ctrl_ops, V4L2_CID_ANALOGUE_GAIN,
-			  OV02C10_ANAL_GAIN_MIN, OV02C10_ANAL_GAIN_MAX,
+			  OV02C10_ANAL_GAIN_MIN, ov02c10_again_max(),
 			  OV02C10_ANAL_GAIN_STEP, OV02C10_ANAL_GAIN_DEFAULT);
 	v4l2_ctrl_new_std(ctrl_hdlr, &ov02c10_ctrl_ops, V4L2_CID_DIGITAL_GAIN,
 			  OV02C10_DGTL_GAIN_MIN, OV02C10_DGTL_GAIN_MAX,
-			  OV02C10_DGTL_GAIN_STEP, OV02C10_DGTL_GAIN_DEFAULT);
+			  OV02C10_DGTL_GAIN_STEP, ov02c10_dgain_default());
 	exposure_max = vts_def - OV02C10_EXPOSURE_MAX_MARGIN;
 	ov02c10->exposure = v4l2_ctrl_new_std(ctrl_hdlr, &ov02c10_ctrl_ops,
 					      V4L2_CID_EXPOSURE,
