@@ -455,6 +455,9 @@ struct ov02c10 {
 	/* MIPI lane info */
 	u32 link_freq_index;
 	u8 mipi_lanes;
+
+	/* Actual external clock. 19.2MHz upstream, 26MHz on Raptor Lake. */
+	unsigned long mclk_freq;
 };
 
 static inline struct ov02c10 *to_ov02c10(struct v4l2_subdev *subdev)
@@ -575,11 +578,52 @@ static int ov02c10_init_controls(struct ov02c10 *ov02c10)
 	pixel_rate = div_u64(link_freq_menu_items[ov02c10->link_freq_index] *
 			     2 * ov02c10->mipi_lanes, OV02C10_RGB_DEPTH);
 
+	vts_def = mode->vts_min * ov02c10->mipi_lanes;
+
+	/*
+	 * The sensor's register lists — PLL included — were written upstream for
+	 * a 19.2MHz external clock. This package also accepts the 26MHz clock
+	 * used on Raptor Lake boards, but nothing re-times the PLL, so on those
+	 * boards the whole sensor clock tree simply runs 26/19.2 = 1.354x fast.
+	 *
+	 * We deliberately do NOT try to re-time the PLL. Testing on real 26MHz
+	 * hardware (issue #71) showed 0x0304:0x0305 is the MIPI/link PLL — moving
+	 * it starves the CSI-2 link rather than changing frame timing — and that
+	 * 0x0316 is only a partial contributor (frame rate bottoms out at 26fps
+	 * with it zeroed, so it is not the core multiplier). The core PLL divider
+	 * is undocumented and nobody here has the datasheet, so re-timing it would
+	 * be a guess.
+	 *
+	 * Instead, take the fast clock as a given and correct for it in the two
+	 * places userspace actually cares about:
+	 *
+	 *   pixel_rate — tell libcamera the truth (~217MPix/s, not 160), so its
+	 *                line-time model is right and AGC computes real exposure
+	 *                times instead of ones 26% too short.
+	 *   vts_def    — pad the frame with vertical blanking so the frame rate
+	 *                comes back to the intended ~30fps. This also restores the
+	 *                full ~33ms exposure window, so AGC stops running out of
+	 *                integration time and reaching for analog gain in low light.
+	 *
+	 * Both scale by the measured clock, so a 19.2MHz board is bit-for-bit
+	 * unchanged. (Scaling — rather than hardcoding — is the point: an
+	 * unconditional vts/pixel_rate change would drop 19.2MHz boards to ~22fps.)
+	 */
+	if (ov02c10->mclk_freq != OV02C10_MCLK_19_2MHZ) {
+		pixel_rate = mult_frac(pixel_rate, ov02c10->mclk_freq,
+				       OV02C10_MCLK_19_2MHZ);
+		vts_def = mult_frac(vts_def, ov02c10->mclk_freq,
+				    OV02C10_MCLK_19_2MHZ);
+
+		dev_info(ov02c10->dev,
+			 "%luHz clock (not %dHz): sensor runs fast; advertising pixel_rate=%lld and padding vts to %u for ~30fps\n",
+			 ov02c10->mclk_freq, OV02C10_MCLK_19_2MHZ,
+			 pixel_rate, vts_def);
+	}
+
 	ov02c10->pixel_rate = v4l2_ctrl_new_std(ctrl_hdlr, &ov02c10_ctrl_ops,
 						V4L2_CID_PIXEL_RATE, 0,
 						pixel_rate, 1, pixel_rate);
-
-	vts_def = mode->vts_min * ov02c10->mipi_lanes;
 
 	vblank_min = mode->vts_min - mode->height;
 	vblank_max = OV02C10_VTS_MAX - mode->height;
@@ -991,6 +1035,9 @@ static int ov02c10_probe(struct i2c_client *client)
 		return dev_err_probe(ov02c10->dev, -EINVAL,
 				     "external clock %lu is not supported",
 				     freq);
+
+	/* Needed by init_controls() to correct timing on non-19.2MHz clocks. */
+	ov02c10->mclk_freq = freq;
 
 	v4l2_i2c_subdev_init(&ov02c10->sd, client, &ov02c10_subdev_ops);
 
