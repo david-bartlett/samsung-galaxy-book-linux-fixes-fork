@@ -152,6 +152,40 @@ static u32 ov02e10_vts(const struct ov02e10_mode *mode)
 	return mode->vts_def;
 }
 
+/*
+ * Cap on analog gain, in raw register units (0x10 = 16 = 1x, 0xf8 = 248 = 15.5x).
+ *
+ * libcamera's soft IPA reads againMax straight out of this V4L2 control's range
+ * at configure() time (soft_simple.cpp:224), so lowering the ceiling here is the
+ * only way to stop its AGC from reaching for maximum gain — the SoftISP AGC has
+ * no tunable target and no gain limit of its own (agc.cpp is 174 lines of
+ * hardcoded constants; nothing in the tuning YAML touches it).
+ *
+ * The point is to separate two explanations for the vertical stripes:
+ *
+ *   - if capping gain makes the stripes recede, the column FPN is being
+ *     amplified by analog gain and a cap is a real (if darkening) mitigation;
+ *   - if the image just gets darker and the stripes stay in proportion, then
+ *     it is simply low-light SNR — the FPN is fixed and the signal is small —
+ *     and no amount of gain fiddling will help. Only a per-column correction
+ *     stage in the ISP would, and libcamera's SoftISP does not have one.
+ *
+ * Default 0 = stock (248, 15.5x).
+ *
+ *   modprobe ov02e10 max_again=64      # cap at 4x
+ */
+static int max_again;
+module_param(max_again, int, 0644);
+MODULE_PARM_DESC(max_again,
+	"Cap analog gain in raw units (16=1x, 64=4x, 248=15.5x). 0 = stock (248). Experimental, see issue #67.");
+
+static u32 ov02e10_again_max(void)
+{
+	if (max_again >= OV02E10_ANAL_GAIN_MIN && max_again <= OV02E10_ANAL_GAIN_MAX)
+		return max_again;
+	return OV02E10_ANAL_GAIN_MAX;
+}
+
 static const struct reg_sequence mode_1928x1088_30fps_2lane[] = {
 	{ 0xfd, 0x00 },
 	{ 0x20, 0x00 },
@@ -462,7 +496,7 @@ static int ov02e10_init_controls(struct ov02e10 *ov02e10)
 		ov02e10->hblank->flags |= V4L2_CTRL_FLAG_READ_ONLY;
 
 	v4l2_ctrl_new_std(ctrl_hdlr, &ov02e10_ctrl_ops, V4L2_CID_ANALOGUE_GAIN,
-			  OV02E10_ANAL_GAIN_MIN, OV02E10_ANAL_GAIN_MAX,
+			  OV02E10_ANAL_GAIN_MIN, ov02e10_again_max(),
 			  OV02E10_ANAL_GAIN_STEP, OV02E10_ANAL_GAIN_MIN);
 
 	v4l2_ctrl_new_std(ctrl_hdlr, &ov02e10_ctrl_ops, V4L2_CID_DIGITAL_GAIN,

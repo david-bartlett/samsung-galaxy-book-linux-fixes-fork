@@ -49,6 +49,35 @@ you opt in.
 
 Frame rate is `SCLK / (hts × vts)` = `36 MHz / (534 × vts)`.
 
+### Result: `vts` alone is not enough
+
+Tested on 940XHA (#67). At `vts=4488` — 15 fps, a **doubled** 66.5 ms exposure
+window — AGC consumed the entire window and *still* settled at `analogue_gain =
+248`, the 15.5× maximum. So in a genuinely dim scene, twice the exposure does not
+buy enough light to let AGC back off. The exposure lever, on its own, is exhausted.
+
+## Second lever: `max_again`
+
+Since AGC won't voluntarily use less gain, take the choice away from it.
+
+libcamera's soft IPA reads `againMax` straight out of the V4L2 control range at
+`configure()` time (`soft_simple.cpp:224`), and its AGC has **no tunable target and
+no gain limit of its own** — `agc.cpp` is 174 lines of hardcoded constants, and
+nothing in the tuning YAML reaches it. So the driver's gain ceiling *is* AGC's gain
+ceiling.
+
+```bash
+sudo rmmod ov02e10
+sudo insmod ./ov02e10.ko vts=4488 max_again=64    # 15fps, gain capped at 4x
+```
+
+| `max_again` | gain cap |
+|---|---|
+| 248 (stock) | 15.5× |
+| 96 | 6× |
+| 64 | 4× |
+| 32 | 2× |
+
 ## The measurement
 
 In the **same dim scene** each time, open the camera and read back what AGC
@@ -60,18 +89,22 @@ v4l2-ctl -d /dev/v4l-subdev4 --get-ctrl=analogue_gain,exposure
 
 (Your subdev number may differ — find it with `v4l2-ctl --list-devices`.)
 
-Stock, in a dim room, AGC pegs at **analogue_gain = 248** (the 15.5× maximum). The
-experiment is simple:
+This is the experiment that decides whether anything is fixable here:
 
-- **Gain drops and the stripes visibly recede** → confirmed. Trading frame rate
-  for exposure is a real mitigation, and we can ship it as an opt-in low-light mode.
-- **Gain drops but the stripes stay** → the FPN is not gain-dominated, and the only
-  real fix is a per-column correction stage in libcamera's SoftISP (which does not
-  currently exist — its algorithms are `BlackLevel`, `Awb`, `Ccm`, `Adjust`, `Agc`,
-  and `BlackLevel` is a single *global* offset, not per-column).
+- **The stripes recede and the image is merely darker** → the FPN *is*
+  gain-amplified, a cap is a real mitigation, and we can ship it as an opt-in
+  low-noise mode (optionally clawing brightness back with digital gain, which
+  amplifies signal and noise equally and so doesn't reintroduce the stripes).
+- **The image just gets darker and the stripes stay in proportion** → this is
+  plain low-light SNR: the FPN is fixed, the signal is small, and gain isn't the
+  culprit — it's merely the messenger. In that case *no* gain or exposure setting
+  will ever help, and the only real fix is a per-column correction stage in
+  libcamera's SoftISP. That does not exist today (its algorithms are `BlackLevel`,
+  `Awb`, `Ccm`, `Adjust`, `Agc`, and `BlackLevel` is a single **global** offset,
+  not per-column), so it would be upstream work.
 
-Both outcomes are worth knowing. Report the `analogue_gain` value either way — that
-number *is* the experiment.
+Both outcomes are worth knowing, and the second one is a legitimate answer. Report
+the `analogue_gain` value and whether the stripes changed — that *is* the experiment.
 
 ## Restore
 
