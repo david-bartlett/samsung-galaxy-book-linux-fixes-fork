@@ -84,6 +84,37 @@ module_param(pll2_mult, int, 0644);
 MODULE_PARM_DESC(pll2_mult,
 	"Override system/pixel PLL multiplier (0x0316). -1 = use the mode's value (default, 0x90=144). This is the one that should drive frame rate. Experimental, see issue #71.");
 
+#define OV02C10_REG_CHIP_ID		CCI_REG16(0x300a)
+#define OV02C10_CHIP_ID			0x5602
+
+#define OV02C10_REG_STREAM_CONTROL	CCI_REG8(0x0100)
+
+#define OV02C10_REG_HTS			CCI_REG16(0x380c)
+
+/* vertical-timings from sensor */
+#define OV02C10_REG_VTS			CCI_REG16(0x380e)
+#define OV02C10_VTS_MAX			0xffff
+
+/* Exposure controls from sensor */
+#define OV02C10_REG_EXPOSURE		CCI_REG16(0x3501)
+#define OV02C10_EXPOSURE_MIN		4
+#define OV02C10_EXPOSURE_MAX_MARGIN	8
+#define OV02C10_EXPOSURE_STEP		1
+
+/* Analog gain controls from sensor */
+#define OV02C10_REG_ANALOG_GAIN		CCI_REG16(0x3508)
+#define OV02C10_ANAL_GAIN_MIN		0x10
+#define OV02C10_ANAL_GAIN_MAX		0xf8
+#define OV02C10_ANAL_GAIN_STEP		1
+#define OV02C10_ANAL_GAIN_DEFAULT	0x10
+
+/* Digital gain controls from sensor */
+#define OV02C10_REG_DIGITAL_GAIN	CCI_REG24(0x350a)
+#define OV02C10_DGTL_GAIN_MIN		0x0400
+#define OV02C10_DGTL_GAIN_MAX		0x3fff
+#define OV02C10_DGTL_GAIN_STEP		1
+#define OV02C10_DGTL_GAIN_DEFAULT	0x0400
+
 /*
  * Low-noise profile — the same fix confirmed on the sibling OV02E10 in #67.
  *
@@ -129,37 +160,6 @@ static u32 ov02c10_dgain_default(void)
 		return dgain;
 	return OV02C10_DGTL_GAIN_DEFAULT;
 }
-
-#define OV02C10_REG_CHIP_ID		CCI_REG16(0x300a)
-#define OV02C10_CHIP_ID			0x5602
-
-#define OV02C10_REG_STREAM_CONTROL	CCI_REG8(0x0100)
-
-#define OV02C10_REG_HTS			CCI_REG16(0x380c)
-
-/* vertical-timings from sensor */
-#define OV02C10_REG_VTS			CCI_REG16(0x380e)
-#define OV02C10_VTS_MAX			0xffff
-
-/* Exposure controls from sensor */
-#define OV02C10_REG_EXPOSURE		CCI_REG16(0x3501)
-#define OV02C10_EXPOSURE_MIN		4
-#define OV02C10_EXPOSURE_MAX_MARGIN	8
-#define OV02C10_EXPOSURE_STEP		1
-
-/* Analog gain controls from sensor */
-#define OV02C10_REG_ANALOG_GAIN		CCI_REG16(0x3508)
-#define OV02C10_ANAL_GAIN_MIN		0x10
-#define OV02C10_ANAL_GAIN_MAX		0xf8
-#define OV02C10_ANAL_GAIN_STEP		1
-#define OV02C10_ANAL_GAIN_DEFAULT	0x10
-
-/* Digital gain controls from sensor */
-#define OV02C10_REG_DIGITAL_GAIN	CCI_REG24(0x350a)
-#define OV02C10_DGTL_GAIN_MIN		0x0400
-#define OV02C10_DGTL_GAIN_MAX		0x3fff
-#define OV02C10_DGTL_GAIN_STEP		1
-#define OV02C10_DGTL_GAIN_DEFAULT	0x0400
 
 /* Rotate */
 #define OV02C10_ROTATE_CONTROL		CCI_REG8(0x3820)
