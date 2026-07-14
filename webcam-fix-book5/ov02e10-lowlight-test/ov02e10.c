@@ -186,6 +186,39 @@ static u32 ov02e10_again_max(void)
 	return OV02E10_ANAL_GAIN_MAX;
 }
 
+/*
+ * Default digital gain (256 = 1x, 1020 = ~4x). libcamera's soft AGC never touches
+ * digital gain — it only drives exposure and *analog* gain — so whatever we set
+ * here simply stands.
+ *
+ * This exists to answer the one question that decides whether capping analog gain
+ * is a real fix or an illusion: capping it removes the stripes, but it also makes
+ * the picture darker, and a darker picture hides noise for free. So restore the
+ * brightness digitally and look again.
+ *
+ *   max_again=64 dgain=1020   ->  4x analog * 4x digital = 16x total,
+ *                                 i.e. the same overall brightness as the stock
+ *                                 15.5x analog, but with most of the gain moved
+ *                                 out of the analog column chain.
+ *
+ * If the stripes stay away at matched brightness, analog gain really is what
+ * amplifies the column FPN and the cap is a genuine fix. If they come back, the
+ * "improvement" was only the darkness, and no gain arrangement will help.
+ *
+ * Default 0 = stock (256, 1x).
+ */
+static int dgain;
+module_param(dgain, int, 0644);
+MODULE_PARM_DESC(dgain,
+	"Default digital gain (256=1x, 1020=~4x). 0 = stock (256). Use with max_again to restore brightness. Experimental, see issue #67.");
+
+static u32 ov02e10_dgain_default(void)
+{
+	if (dgain >= OV02E10_DGTL_GAIN_MIN && dgain <= OV02E10_DGTL_GAIN_MAX)
+		return dgain;
+	return OV02E10_DGTL_GAIN_DEFAULT;
+}
+
 static const struct reg_sequence mode_1928x1088_30fps_2lane[] = {
 	{ 0xfd, 0x00 },
 	{ 0x20, 0x00 },
@@ -501,7 +534,7 @@ static int ov02e10_init_controls(struct ov02e10 *ov02e10)
 
 	v4l2_ctrl_new_std(ctrl_hdlr, &ov02e10_ctrl_ops, V4L2_CID_DIGITAL_GAIN,
 			  OV02E10_DGTL_GAIN_MIN, OV02E10_DGTL_GAIN_MAX,
-			  OV02E10_DGTL_GAIN_STEP, OV02E10_DGTL_GAIN_DEFAULT);
+			  OV02E10_DGTL_GAIN_STEP, ov02e10_dgain_default());
 
 	exposure_max = ov02e10_vts(mode) - OV02E10_EXPOSURE_MAX_MARGIN;
 	ov02e10->exposure = v4l2_ctrl_new_std(ctrl_hdlr, &ov02e10_ctrl_ops,

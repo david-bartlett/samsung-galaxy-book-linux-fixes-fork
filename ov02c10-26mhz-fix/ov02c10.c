@@ -555,6 +555,24 @@ static const struct v4l2_ctrl_ops ov02c10_ctrl_ops = {
 	.s_ctrl = ov02c10_set_ctrl,
 };
 
+/*
+ * The frame length (VTS) this mode should use, corrected for the actual external
+ * clock. Used by both init_controls() and set_fmt() — set_fmt resets VBLANK to
+ * the default on every call, so if only one of them applied the correction the
+ * other would silently undo it. (issue #71)
+ */
+static u32 ov02c10_vts_def(struct ov02c10 *ov02c10,
+			   const struct ov02c10_mode *mode)
+{
+	u32 vts_def = mode->vts_min * ov02c10->mipi_lanes;
+
+	if (ov02c10->mclk_freq != OV02C10_MCLK_19_2MHZ)
+		vts_def = mult_frac(vts_def, ov02c10->mclk_freq,
+				    OV02C10_MCLK_19_2MHZ);
+
+	return vts_def;
+}
+
 static int ov02c10_init_controls(struct ov02c10 *ov02c10)
 {
 	struct v4l2_ctrl_handler *ctrl_hdlr = &ov02c10->ctrl_handler;
@@ -577,8 +595,6 @@ static int ov02c10_init_controls(struct ov02c10 *ov02c10)
 	/* MIPI lanes are DDR -> use link-freq * 2 */
 	pixel_rate = div_u64(link_freq_menu_items[ov02c10->link_freq_index] *
 			     2 * ov02c10->mipi_lanes, OV02C10_RGB_DEPTH);
-
-	vts_def = mode->vts_min * ov02c10->mipi_lanes;
 
 	/*
 	 * The sensor's register lists — PLL included — were written upstream for
@@ -609,11 +625,10 @@ static int ov02c10_init_controls(struct ov02c10 *ov02c10)
 	 * unchanged. (Scaling — rather than hardcoding — is the point: an
 	 * unconditional vts/pixel_rate change would drop 19.2MHz boards to ~22fps.)
 	 */
+	vts_def = ov02c10_vts_def(ov02c10, mode);
 	if (ov02c10->mclk_freq != OV02C10_MCLK_19_2MHZ) {
 		pixel_rate = mult_frac(pixel_rate, ov02c10->mclk_freq,
 				       OV02C10_MCLK_19_2MHZ);
-		vts_def = mult_frac(vts_def, ov02c10->mclk_freq,
-				    OV02C10_MCLK_19_2MHZ);
 
 		dev_info(ov02c10->dev,
 			 "%luHz clock (not %dHz): sensor runs fast; advertising pixel_rate=%lld and padding vts to %u for ~30fps\n",
@@ -853,8 +868,16 @@ static int ov02c10_set_format(struct v4l2_subdev *sd,
 	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY)
 		return 0;
 
-	/* Update limits and set FPS to default */
-	vblank_def = mode->vts_min * ov02c10->mipi_lanes - mode->height;
+	/*
+	 * Update limits and set FPS to default.
+	 *
+	 * This runs on every set_fmt — which libcamera calls during configure(),
+	 * i.e. immediately before streaming — and it *resets* VBLANK to the
+	 * default. So the clock correction has to be applied here too, not just
+	 * in init_controls(), or it gets silently overwritten right before the
+	 * camera starts and the sensor goes back to running fast. (issue #71)
+	 */
+	vblank_def = ov02c10_vts_def(ov02c10, mode) - mode->height;
 	__v4l2_ctrl_modify_range(ov02c10->vblank, mode->vts_min - mode->height,
 				 OV02C10_VTS_MAX - mode->height, 1, vblank_def);
 	__v4l2_ctrl_s_ctrl(ov02c10->vblank, vblank_def);
