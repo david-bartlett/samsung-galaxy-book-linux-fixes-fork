@@ -154,6 +154,35 @@ static u32 ov02c10_again_max(void)
 	return OV02C10_ANAL_GAIN_MAX;
 }
 
+/*
+ * Cap on the exposure ceiling AGC is allowed to reach, in sensor lines.
+ * DIAGNOSTIC for the bright-light white-out in issue #71.
+ *
+ * libcamera's soft AGC is supposed to reduce exposure when a scene is too
+ * bright, but on this setup it drops gain to minimum and then leaves exposure
+ * pinned at its maximum, blowing the image to pure white. The higher that
+ * maximum is, the worse the blow-out — and padding VTS for the 30fps fix raised
+ * it (2320 -> 3144 lines). This lets us test whether capping the ceiling below
+ * the padded frame length restores a usable bright-light image *without* giving
+ * up the 30fps timing (the two are otherwise coupled through VTS).
+ *
+ * Applied wherever exposure_max is derived. 0 = no cap (default).
+ *
+ *   modprobe ov02c10 max_exp=2320
+ */
+static int max_exp;
+module_param(max_exp, int, 0644);
+MODULE_PARM_DESC(max_exp,
+	"Cap the exposure ceiling in sensor lines, independent of frame rate. 0 = no cap (default). Diagnostic for the bright-light white-out, see issue #71.");
+
+/* Apply the max_exp cap to a computed exposure ceiling. */
+static s64 ov02c10_cap_exposure(s64 exposure_max)
+{
+	if (max_exp > 0 && max_exp < exposure_max)
+		return max_exp;
+	return exposure_max;
+}
+
 static u32 ov02c10_dgain_default(void)
 {
 	if (dgain >= OV02C10_DGTL_GAIN_MIN && dgain <= OV02C10_DGTL_GAIN_MAX)
@@ -538,6 +567,7 @@ static int ov02c10_set_ctrl(struct v4l2_ctrl *ctrl)
 	if (ctrl->id == V4L2_CID_VBLANK) {
 		/* Update max exposure while meeting expected vblanking */
 		exposure_max = height + ctrl->val - OV02C10_EXPOSURE_MAX_MARGIN;
+		exposure_max = ov02c10_cap_exposure(exposure_max);
 		__v4l2_ctrl_modify_range(ov02c10->exposure,
 					 ov02c10->exposure->minimum,
 					 exposure_max, ov02c10->exposure->step,
@@ -706,7 +736,7 @@ static int ov02c10_init_controls(struct ov02c10 *ov02c10)
 	v4l2_ctrl_new_std(ctrl_hdlr, &ov02c10_ctrl_ops, V4L2_CID_DIGITAL_GAIN,
 			  OV02C10_DGTL_GAIN_MIN, OV02C10_DGTL_GAIN_MAX,
 			  OV02C10_DGTL_GAIN_STEP, ov02c10_dgain_default());
-	exposure_max = vts_def - OV02C10_EXPOSURE_MAX_MARGIN;
+	exposure_max = ov02c10_cap_exposure(vts_def - OV02C10_EXPOSURE_MAX_MARGIN);
 	ov02c10->exposure = v4l2_ctrl_new_std(ctrl_hdlr, &ov02c10_ctrl_ops,
 					      V4L2_CID_EXPOSURE,
 					      OV02C10_EXPOSURE_MIN,
