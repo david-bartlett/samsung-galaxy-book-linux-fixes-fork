@@ -38,7 +38,7 @@
  	if (orientation != requestedOrientation)
  		status = Adjusted;
  
-@@ -1525,8 +1549,22 @@
+@@ -1525,8 +1549,35 @@
  
  	/* Configure the video node, taking into account any Bayer pattern change. */
  	V4L2PixelFormat videoFormat;
@@ -53,7 +53,20 @@
 +		 */
 +		BayerFormat cfgBayer = BayerFormat::fromPixelFormat(pipeConfig->captureFormat);
 +		if (cfgBayer.isValid()) {
-+			cfgBayer.order = data->sensor_->bayerOrder(config->combinedTransform());
++			/*
++			 * OV02E10 only shifts its physical bayer readout for
++			 * HFlip, not VFlip (confirmed on 940XHA/960XHA
++			 * hardware). data->sensor_->bayerOrder() XORs both
++			 * flip bits unconditionally, which is wrong here once
++			 * VFlip is part of the composed transform (e.g. under
++			 * a Rot180 mounting correction) — XOR only the HFlip
++			 * bit for this sensor instead.
++			 */
++			if (data->sensor_->model() == "ov02e10")
++				cfgBayer.order = static_cast<BayerFormat::Order>(
++					cfgBayer.order ^ (static_cast<int>(config->combinedTransform()) & 1));
++			else
++				cfgBayer.order = data->sensor_->bayerOrder(config->combinedTransform());
 +			ispFormat = cfgBayer.toV4L2PixelFormat();
 +		} else {
 +			ispFormat = videoFormat;
@@ -61,7 +74,7 @@
  	} else {
  		/*
  		 * Bayer pattern has changed because of the transform that was applied on
-@@ -1536,6 +1574,7 @@
+@@ -1536,6 +1587,7 @@
  		BayerFormat cfgBayer = BayerFormat::fromPixelFormat(pipeConfig->captureFormat);
  		cfgBayer.order = data->sensor_->bayerOrder(config->combinedTransform());
  		videoFormat = cfgBayer.toV4L2PixelFormat();
@@ -69,7 +82,7 @@
  	}
  
  	V4L2DeviceFormat captureFormat;
-@@ -1583,7 +1622,7 @@
+@@ -1583,7 +1635,7 @@
  		return 0;
  
  	StreamConfiguration inputCfg;

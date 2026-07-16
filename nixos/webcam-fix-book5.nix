@@ -1,3 +1,13 @@
+# Samsung Galaxy Book 5 webcam fix for IPU7/OV02C10/OV02E10.
+#
+# This module patches libcamera system-wide via nixpkgs.overlays. That overlay
+# cascades through the Nix fixed-point: patched libcamera -> pipewire ->
+# openal-soft / chromium / discord / qemu / webkitgtk / ... all get new store
+# hashes and must be rebuilt from source. To avoid the cascade, callers should
+# set `nixpkgsUnpatched` to a truly overlay-free package set
+# (inputs.nixpkgs.legacyPackages.${system}); see that option for details.
+# Using `prev.pipewire` inside the overlay does NOT work — `prev` evaluates
+# packages against the final fixed-point, so it is already tainted.
 { config, lib, pkgs, ... }:
 
 let
@@ -188,6 +198,26 @@ let
 in
 {
   options.hardware.samsungGalaxyBook.webcamFixBook5 = {
+    enable = lib.mkEnableOption "Samsung Galaxy Book 5 webcam fix (IPU7/OV02C10/OV02E10)";
+
+    nixpkgsUnpatched = lib.mkOption {
+      type = lib.types.nullOr lib.types.raw;
+      default = null;
+      description = ''
+        An unoverlay'd nixpkgs package set (e.g. `inputs.nixpkgs.legacyPackages.''${pkgs.system}`).
+
+        The libcamera overlay injected by this module cascades through the Nix
+        fixed-point into every package that links libpipewire (chromium, discord,
+        qemu, openal-soft, webkitgtk, ...), causing all of them to be rebuilt from
+        source. Setting this option breaks the cascade by pinning pipewire back to
+        the unpatched version — only libcamera itself rebuilds. Camera apps access
+        the fix via the relay's v4l2loopback device regardless.
+
+        Without this option the cascade is unavoidable; callers that care about
+        binary-cache hits should always set it.
+      '';
+    };
+
     videoFlip = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -222,7 +252,7 @@ in
     };
   };
 
-  config = {
+  config = lib.mkIf cfg.enable {
   # OV02E10 (Book5) can show purple/green tint when rotated because the
   # kernel driver may not update Bayer layout metadata after transform.
   # Patch libcamera Simple pipeline to recompute Bayer order from transform.
@@ -292,7 +322,13 @@ in
         '';
       });
     })
-  ];
+  ] ++ lib.optional (cfg.nixpkgsUnpatched != null) (
+    # Pin pipewire to the unpatched base to stop the libcamera overlay from
+    # cascading through the Nix fixed-point into every libpipewire consumer.
+    # prev.pipewire inside an overlay is already tainted (it evaluates with
+    # final.libcamera), so the only escape is a truly overlay-free package set.
+    _: _: {pipewire = cfg.nixpkgsUnpatched.pipewire;}
+  );
 
   boot.initrd.kernelModules = [
     "usb_ljca"
