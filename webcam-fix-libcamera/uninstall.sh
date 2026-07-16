@@ -124,6 +124,8 @@ echo "  ✓ Udev rules removed"
 echo "[5/8] Removing WirePlumber rules..."
 sudo rm -f /etc/wireplumber/main.lua.d/51-disable-ipu6-v4l2.lua
 sudo rm -f /etc/wireplumber/wireplumber.conf.d/50-disable-ipu6-v4l2.conf
+sudo rm -f /etc/wireplumber/main.lua.d/52-disable-libcamera-node.lua
+sudo rm -f /etc/wireplumber/wireplumber.conf.d/52-disable-libcamera-node.conf
 # Restore backed-up SPA plugin if present
 SPA_BAK=$(find /usr/lib -name "libspa-libcamera.so.bak" -path "*/spa-0.2/libcamera/*" 2>/dev/null | head -1)
 if [[ -n "$SPA_BAK" ]]; then

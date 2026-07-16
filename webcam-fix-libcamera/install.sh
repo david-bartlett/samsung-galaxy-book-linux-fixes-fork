@@ -800,7 +800,22 @@ PATCH_EOF
         -Dpycamera=disabled
 
     ninja -C build -j$(nproc)
-    sudo ninja -C build install
+    # Install with the same meson that configured the build. /usr/bin/meson is a
+    # thin wrapper that imports whichever mesonbuild module Python can see: for
+    # the invoking user that may be a pip install under ~/.local, but sudo's
+    # secure_path hides it and root falls back to the older distro mesonbuild.
+    # The mismatch makes 'meson install' reject the install.dat setup just wrote
+    # ("references functions or classes that don't exist"), so the whole build is
+    # thrown away at the final step. Hand root the user's module path when the
+    # two differ.
+    MESON_USER_SITE=$(python3 -c 'import site; print(site.getusersitepackages())' 2>/dev/null || true)
+    if [[ -n "$MESON_USER_SITE" && -d "$MESON_USER_SITE/mesonbuild" ]] && \
+       [[ "$(meson --version 2>/dev/null)" != "$(sudo meson --version 2>/dev/null)" ]]; then
+        echo "  Note: root's meson differs from yours — installing with PYTHONPATH=$MESON_USER_SITE"
+        sudo env PYTHONPATH="${MESON_USER_SITE}${PYTHONPATH:+:$PYTHONPATH}" ninja -C build install
+    else
+        sudo ninja -C build install
+    fi
 
     # Ensure the source-built libcamera is in the dynamic linker search path.
     # meson's libdir under /usr/local differs by distro: Ubuntu/Debian use
@@ -1096,17 +1111,41 @@ echo "[10/14] Installing PipeWire libcamera plugin..."
 # plugin against our source-built libcamera (0.4.x).
 rebuild_spa_plugin() {
     local PW_VER
-    PW_VER=$(pipewire --version 2>/dev/null | grep -oP 'libpipewire \K[0-9]+\.[0-9]+\.[0-9]+' || echo "1.0.5")
+    # 'pipewire --version' reports the version twice ("Compiled with libpipewire
+    # X.Y.Z" and "Linked with libpipewire X.Y.Z"), so an unbounded grep yields
+    # "1.0.5\n1.0.5". git rejects that as a branch name, the fallback clone below
+    # then silently takes the default branch, and the SPA plugin gets built
+    # against a completely different PipeWire ABI than the one running (master
+    # 1.7.x vs a system 1.0.x). The result loads without complaint but delivers
+    # zero frames, so PipeWire-native apps (GNOME Snapshot) show pure black while
+    # the v4l2 relay path keeps working — a confusing split. Take the first match.
+    PW_VER=$(pipewire --version 2>/dev/null | grep -oP 'libpipewire \K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    PW_VER=${PW_VER:-1.0.5}
     echo "  Rebuilding PipeWire SPA libcamera plugin (PipeWire $PW_VER)..."
 
     local SPA_BUILD_DIR="/tmp/pipewire-spa-build"
     rm -rf "$SPA_BUILD_DIR"
-    git clone --depth 1 --branch "$PW_VER" \
-        https://gitlab.freedesktop.org/pipewire/pipewire.git "$SPA_BUILD_DIR" 2>/dev/null || \
-    git clone --depth 1 \
-        https://gitlab.freedesktop.org/pipewire/pipewire.git "$SPA_BUILD_DIR"
+    if ! git clone --depth 1 --branch "$PW_VER" \
+            https://gitlab.freedesktop.org/pipewire/pipewire.git "$SPA_BUILD_DIR" 2>/dev/null; then
+        echo "  ⚠ No upstream PipeWire tag '$PW_VER' — falling back to the default branch."
+        echo "    The plugin may then be built against a different PipeWire ABI than"
+        echo "    yours; if PipeWire-native apps show black afterwards, start here."
+        git clone --depth 1 \
+            https://gitlab.freedesktop.org/pipewire/pipewire.git "$SPA_BUILD_DIR"
+    fi
 
     cd "$SPA_BUILD_DIR"
+
+    # libcamera 0.7 changed ControlList::get(properties::Model) to hand back a
+    # std::optional<std::string_view>; PipeWire 1.0.x still returns it straight
+    # into a std::string, so the plugin does not compile against our source-built
+    # libcamera ("could not convert basic_string_view to std::string"). Convert
+    # explicitly. This is a no-op on PipeWire versions that already handle it.
+    if [[ -f spa/plugins/libcamera/libcamera-device.cpp ]]; then
+        sed -i 's/return std::move(model\.value());/return std::string(model.value());/' \
+            spa/plugins/libcamera/libcamera-device.cpp
+    fi
+
     PKG_CONFIG_PATH=/usr/local/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH \
         meson setup build \
         -Dsession-managers=[] \
@@ -1170,7 +1209,11 @@ case "$DISTRO" in
             if [[ -n "$SPA_LIBCAMERA_MINOR" ]] && [[ "$SPA_LIBCAMERA_MINOR" -lt 7 ]] && \
                [[ -n "$LOCAL_LIBCAMERA" ]]; then
                 echo "  SPA plugin links against libcamera $SPA_LIBCAMERA_VER (need >= 0.7)"
-                rebuild_spa_plugin
+                # Non-fatal: step 12 disables the direct libcamera node anyway, so a
+                # failure here costs nothing — apps reach the camera via the v4l2
+                # relay. Aborting the whole install over it would be worse.
+                rebuild_spa_plugin || \
+                    echo "  ⚠ SPA plugin rebuild failed — continuing (the libcamera node is disabled; apps use the v4l2 relay)"
             else
                 echo "  ✓ PipeWire libcamera SPA plugin ready"
             fi
@@ -1214,15 +1257,25 @@ done
 # Ubuntu path, otherwise the source build is ignored on Arch/Fedora and apps
 # silently fall back to the (possibly unpatched) distro libcamera. (issue #52)
 LOCAL_IPA_DIR=""
+LOCAL_LIBDIR=""
 for d in /usr/local/lib/x86_64-linux-gnu/libcamera /usr/local/lib/aarch64-linux-gnu/libcamera \
          /usr/local/lib64/libcamera /usr/local/lib/libcamera; do
-    if [[ -d "$d" ]] && ls "$d"/ipa_*.so >/dev/null 2>&1; then
-        LOCAL_IPA_DIR="$d"
-        break
-    fi
+    [[ -d "$d" ]] || continue
+    # libcamera >= 0.7 installs the IPA modules into an 'ipa' subdirectory;
+    # older builds drop them straight into <libdir>/libcamera. Check both — only
+    # matching the flat layout leaves LOCAL_IPA_DIR empty on 0.7+, which silently
+    # skips the whole block below and strands whatever stale
+    # LIBCAMERA_IPA_MODULE_PATH a previous install wrote. (issue #71)
+    for sub in "$d/ipa" "$d"; do
+        if ls "$sub"/ipa_*.so >/dev/null 2>&1; then
+            LOCAL_IPA_DIR="$sub"
+            LOCAL_LIBDIR="$(dirname "$d")"
+            break 2
+        fi
+    done
 done
 if [[ -n "$LOCAL_IPA_DIR" ]]; then
-    LOCAL_GST_DIR="$(dirname "$LOCAL_IPA_DIR")/gstreamer-1.0"
+    LOCAL_GST_DIR="$LOCAL_LIBDIR/gstreamer-1.0"
     sudo mkdir -p /etc/environment.d
     {
         echo "# libcamera IPA module path for source-built libcamera"
@@ -1346,7 +1399,26 @@ rule = {
 }
 table.insert(v4l2_monitor.rules, rule)
 WPEOF
-    echo "  ✓ WirePlumber Lua rule installed (v4l2 nodes hidden)"
+    sudo tee /etc/wireplumber/main.lua.d/52-disable-libcamera-node.lua > /dev/null << 'WPEOF'
+-- Disable the direct libcamera node in PipeWire; apps use the v4l2 relay.
+-- PipeWire's libcamera SPA plugin cannot stream this sensor on PipeWire 1.0.x
+-- against a source-built libcamera 0.7.x: it negotiates a 640x480 fallback,
+-- emits one black frame and then stalls. PipeWire-native apps (GNOME Snapshot)
+-- pick that node over the relay and show pure black, while every v4l2 app works
+-- — which reads as "the camera is broken" rather than "one node is broken".
+rule = {
+  matches = {
+    {
+      { "node.name", "matches", "libcamera_input.*" },
+    },
+  },
+  apply_properties = {
+    ["node.disabled"] = true,
+  },
+}
+table.insert(libcamera_monitor.rules, rule)
+WPEOF
+    echo "  ✓ WirePlumber Lua rules installed (raw v4l2 + libcamera nodes hidden)"
 else
     # WirePlumber 0.5+ — uses JSON conf.d
     sudo mkdir -p /etc/wireplumber/wireplumber.conf.d
@@ -1366,7 +1438,27 @@ monitor.v4l2.rules = [
   }
 ]
 WPEOF
-    echo "  ✓ WirePlumber conf.d rule installed (v4l2 nodes hidden)"
+    sudo tee /etc/wireplumber/wireplumber.conf.d/52-disable-libcamera-node.conf > /dev/null << 'WPEOF'
+# Disable the direct libcamera node in PipeWire; apps use the v4l2 relay.
+# PipeWire's libcamera SPA plugin cannot stream this sensor on PipeWire 1.0.x
+# against a source-built libcamera 0.7.x: it negotiates a 640x480 fallback,
+# emits one black frame and then stalls. PipeWire-native apps (GNOME Snapshot)
+# pick that node over the relay and show pure black, while every v4l2 app works
+# — which reads as "the camera is broken" rather than "one node is broken".
+monitor.libcamera.rules = [
+  {
+    matches = [
+      { node.name = "~libcamera_input.*" }
+    ]
+    actions = {
+      update-props = {
+        node.disabled = true
+      }
+    }
+  }
+]
+WPEOF
+    echo "  ✓ WirePlumber conf.d rules installed (raw v4l2 + libcamera nodes hidden)"
 fi
 
 echo "  ✓ Raw IPU6 nodes hidden from applications"
