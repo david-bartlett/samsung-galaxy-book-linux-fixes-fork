@@ -179,6 +179,7 @@ The Galaxy Book4/5 laptops have built-in dual array digital microphones (DMIC). 
 - **Samsung Galaxy Book5 Pro** — Speaker fix confirmed working, mic continues to work (community-confirmed)
 - **Samsung Galaxy Book5 Pro (940XHA)** — Fedora 43, webcam fix confirmed (correct colors + orientation with bayer fix)
 - **Samsung Galaxy Book5 Pro 16" (960XHA)** — Ubuntu 24.04, kernel 6.19.2, webcam fix confirmed (correct colors + orientation with bayer fix)
+- **Samsung Galaxy Book5 Pro 16" (960XHA)** — NixOS (unstable), kernel 7.0.10-cachyos, webcam fix confirmed (correct colors + orientation with bayer fix v0.7)
 - **Samsung Galaxy Book4 Pro 360 (960QGK)** — Ubuntu 24.04.2, kernel 6.17.0-19-generic, webcam fix confirmed (community-confirmed, [#18](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/18))
 - **Samsung Galaxy Book5 Pro 360 (960QHA)** — Arch Linux, kernel 6.19.9, webcam fix confirmed (community-confirmed, [#22](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/22))
 - **Samsung Galaxy Book3 Pro 360 (960QFG)** — Ubuntu 24.04, webcam rotation fix confirmed (community-confirmed, [#17](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/17))
@@ -231,6 +232,7 @@ Thanks to the following users for their contributions and testing:
 - **[@MatiDegli](https://github.com/MatiDegli)** — Created [speaker-on/off/status helper scripts](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/discussions/4) for manually toggling the speaker fix on and off. These are genuinely useful for battery: the driver enables the amps at probe and never powers them down (the HDA playback hook can't fire without the missing alc269 quirk), so unloading the modules is currently the only way to switch the amps off. Community-contributed and not officially tested — use at your own discretion.
 - **[@pagliarinilucas](https://github.com/pagliarinilucas)** — NixOS module for the speaker fix (declarative kernel module build + I2C device setup). See [`nixos/`](nixos/).
 - **[@derwismtz](https://github.com/derwismtz)** — Tireless testing and Windows trace work that made the Book3 Pro 14" (NP940XFG) speaker fix possible. See [`speaker-fix-940xfg/`](speaker-fix-940xfg/) and [#44](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/44).
+- **[@ang3lo-azevedo](https://github.com/ang3lo-azevedo)** — Created the NixOS module for the Book5 webcam fix and helped test/verify the IPU7 CachyOS kernel compatibility.
 
 ## Credits
 
@@ -246,7 +248,7 @@ Thanks to the following users for their contributions and testing:
 
 ## NixOS
 
-NixOS users can use the declarative Nix modules in [`nixos/`](nixos/) instead of the install scripts. Import `nixos/samsung-speaker-fix.nix` for the speaker fix, `nixos/webcam-fix-libcamera.nix` for the Book3/Book4 webcam fix, and `nixos/webcam-fix-book5.nix` for the Book5 webcam fix, then run `nixos-rebuild switch`. The speaker module builds the kernel modules from source, loads them at boot, and sets up I2C amplifier detection via systemd. The webcam modules load the camera stack early, install the relay or IPU7 module configuration, hide raw V4L2 nodes in WirePlumber, and start the camera services. See the module files for details. Contributed by [@pagliarinilucas](https://github.com/pagliarinilucas).
+NixOS users can use the declarative Nix modules in [`nixos/`](nixos/) instead of the install scripts. Import `nixos/samsung-speaker-fix.nix` for the speaker fix, `nixos/webcam-fix-libcamera.nix` for the Book3/Book4 webcam fix, and `nixos/webcam-fix-book5.nix` for the Book5 webcam fix, then run `nixos-rebuild switch`. The speaker module builds the kernel modules from source, loads them at boot, and sets up I2C amplifier detection via systemd. The webcam modules load the camera stack early, install the relay or IPU7 module configuration, hide raw V4L2 nodes in WirePlumber, and start the camera services. See the module files for details. Contributed by [@pagliarinilucas](https://github.com/pagliarinilucas) (speaker/Book3) and [@ang3lo-azevedo](https://github.com/ang3lo-azevedo) (Book5).
 
 If your camera image comes out upside-down on a Galaxy Book 360 / convertible (e.g. NP960QHA, NP960QFG, NP960QGK) — i.e. the bundled `ipu-bridge` kernel module override didn't engage — set `hardware.samsungGalaxyBook.webcamFixBook5.videoFlip = true;` in your NixOS configuration to flip the camera-relay output in userspace.
 

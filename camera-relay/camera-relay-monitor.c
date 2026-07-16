@@ -198,11 +198,31 @@ static __u32 try_subscribe_events(int fd)
 	return 0;
 }
 
-/* Read exactly n bytes from fd. Returns n on success, <n on EOF/error. */
-static int read_full(int fd, char *buf, int n)
+/* Read exactly n bytes from fd. Returns n on success, <n on EOF/error.
+ * Uses a 100ms poll timeout to pump black frames to out_fd if the pipe
+ * is silent (e.g. during pipeline startup). */
+static int read_full(int fd, char *buf, int n, int out_fd, const char *black_frame)
 {
 	int total = 0;
 	while (total < n) {
+		struct pollfd pfd = { .fd = fd, .events = POLLIN };
+		/* 100ms timeout safely covers the 166ms OBS select() timeout without
+		 * interfering with normal 30fps (33ms) frame arrival. */
+		int ret = poll(&pfd, 1, 100);
+		if (ret == 0) {
+			if (total == 0 && out_fd >= 0 && black_frame) {
+				struct pollfd pout = { .fd = out_fd, .events = POLLOUT };
+				if (poll(&pout, 1, 0) > 0 && (pout.revents & POLLOUT)) {
+					ssize_t w = write(out_fd, black_frame, n);
+					(void)w; /* Best effort pump, ignore errors/partials */
+				}
+			}
+			continue;
+		}
+		if (ret < 0) {
+			if (errno == EINTR) continue;
+			return total;
+		}
 		int r = read(fd, buf + total, n - total);
 		if (r <= 0) {
 			if (r == -1 && errno == EINTR)
@@ -528,21 +548,17 @@ int main(int argc, char *argv[])
 			int need_stop = 0;
 
 			/*
-			 * Tight blocking read — no poll().
-			 * read_full blocks until a full frame arrives,
-			 * then we write immediately. This is critical
-			 * for low latency — poll() between frames
-			 * causes periodic stutter.
-			 *
-			 * During pipeline startup (~2-3s), read_full
-			 * blocks until the first frame arrives. The
-			 * last black frame written in IDLE state keeps
-			 * the device active for clients during this
-			 * time. If the pipeline dies, read_full returns
-			 * short and we handle it below.
+			 * Read from the pipeline pipe.
+			 * read_full now internally polls with a 100ms timeout
+			 * to pump black frames to the device if the pipe is
+			 * silent. This keeps clients like OBS (which has a 166ms
+			 * select timeout) alive during the 2-3s pipeline startup
+			 * without causing stutter during normal 30fps streaming.
+			 * If the pipeline dies, read_full returns short and we
+			 * handle it below.
 			 */
 			int n = read_full(pipe_fd, frame_buf,
-					  frame_size);
+					  frame_size, fd, black_frame);
 			if (n == frame_size) {
 				(void)!write(fd, frame_buf,
 					     frame_size);

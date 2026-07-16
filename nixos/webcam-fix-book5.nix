@@ -1,3 +1,13 @@
+# Samsung Galaxy Book 5 webcam fix for IPU7/OV02C10/OV02E10.
+#
+# This module patches libcamera system-wide via nixpkgs.overlays. That overlay
+# cascades through the Nix fixed-point: patched libcamera -> pipewire ->
+# openal-soft / chromium / discord / qemu / webkitgtk / ... all get new store
+# hashes and must be rebuilt from source. To avoid the cascade, callers should
+# set `nixpkgsUnpatched` to a truly overlay-free package set
+# (inputs.nixpkgs.legacyPackages.${system}); see that option for details.
+# Using `prev.pipewire` inside the overlay does NOT work — `prev` evaluates
+# packages against the final fixed-point, so it is already tainted.
 { config, lib, pkgs, ... }:
 
 let
@@ -136,6 +146,12 @@ let
 
   cameraRelayServiceEnvironment = {
     LIBCAMERA_IPA_MODULE_PATH = "${pkgs.libcamera}/lib/libcamera/ipa";
+    GST_PLUGIN_SYSTEM_PATH_1_0 = lib.makeSearchPath "lib/gstreamer-1.0" (map lib.getLib [
+      pkgs.gst_all_1.gstreamer
+      pkgs.gst_all_1.gst-plugins-base
+      pkgs.gst_all_1.gst-plugins-good
+      pkgs.gst_all_1.gst-plugins-bad
+    ]);
     GST_PLUGIN_PATH = lib.makeSearchPath "lib/gstreamer-1.0" [ pkgs.libcamera ];
     LD_LIBRARY_PATH = lib.makeLibraryPath [ pkgs.libcamera ];
   };
@@ -182,15 +198,34 @@ let
 in
 {
   options.hardware.samsungGalaxyBook.webcamFixBook5 = {
+    enable = lib.mkEnableOption "Samsung Galaxy Book 5 webcam fix (IPU7/OV02C10/OV02E10)";
+
+    nixpkgsUnpatched = lib.mkOption {
+      type = lib.types.nullOr lib.types.raw;
+      default = null;
+      description = ''
+        An unoverlay'd nixpkgs package set (e.g. `inputs.nixpkgs.legacyPackages.''${pkgs.system}`).
+
+        The libcamera overlay injected by this module cascades through the Nix
+        fixed-point into every package that links libpipewire (chromium, discord,
+        qemu, openal-soft, webkitgtk, ...), causing all of them to be rebuilt from
+        source. Setting this option breaks the cascade by pinning pipewire back to
+        the unpatched version — only libcamera itself rebuilds. Camera apps access
+        the fix via the relay's v4l2loopback device regardless.
+
+        Without this option the cascade is unavoidable; callers that care about
+        binary-cache hits should always set it.
+      '';
+    };
+
     videoFlip = lib.mkOption {
       type = lib.types.bool;
       default = false;
       example = true;
       description = ''
         Force the OV02E10 sensor to be treated as rotation=180 inside
-        libcamera, and apply the same flip to the camera-relay output
-        via `RELAY_COLOR_FILTER=videoflip method=vertical-flip` for the
-        v4l2loopback path.
+        libcamera. This corrects the Bayer grid decoding (fixing purple
+        color tints) and provides rotation metadata to PipeWire.
 
         Enable this on Samsung Galaxy Book 360 / convertible models
         (NP960QHA, NP960QFG, NP960QGK, ...) where the OV02E10 sensor is
@@ -198,31 +233,26 @@ in
         kernel module override reports rotation=180 to libcamera via
         SSDB and everything Just Works — but on NixOS the in-tree
         ipu-bridge can win at modprobe time and the rotation is never
-        reported. This option papers over that by:
-
-        1. Setting `LIBCAMERA_FORCE_OV02E10_ROTATION=180` system-wide,
-           which the bundled libcamera bayer-fix patch consumes to
-           force a 180-degree transform on the ov02e10 sensor only.
-           PipeWire-using apps (Firefox with
-           `media.webrtc.camera.allow-pipewire = true`, GNOME
-           Snapshot, etc.) get correctly oriented + correctly coloured
-           output via libcamera-direct.
-
-        2. Setting `RELAY_COLOR_FILTER=videoflip method=vertical-flip`
-           on the camera-relay user service so V4L2-only apps that go
-           through the v4l2loopback bridge also get a flipped frame.
+        reported. This option papers over that by setting
+        `LIBCAMERA_FORCE_OV02E10_ROTATION=180` system-wide.
 
         Strictly opt-in. The env var is only consumed by the libcamera
-        bayer-fix patch when the sensor model is exactly `ov02e10`, so
-        other sensors and other distros' libcamera builds are
-        unaffected even if the env var is set.
+        bayer-fix patch when the sensor model is exactly `ov02e10`.
+      '';
+    };
 
-        Leave disabled if your image is already correctly oriented.
+    relayColorFilter = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+      example = "videoflip method=vertical-flip ! videobalance hue=0.05 saturation=0.95";
+      description = ''
+        Optional GStreamer elements to apply to the camera-relay output.
+        Can be used to apply video flips or color balancing for V4L2 apps.
       '';
     };
   };
 
-  config = {
+  config = lib.mkIf cfg.enable {
   # OV02E10 (Book5) can show purple/green tint when rotated because the
   # kernel driver may not update Bayer layout metadata after transform.
   # Patch libcamera Simple pipeline to recompute Bayer order from transform.
@@ -234,8 +264,9 @@ in
     (final: prev: {
       libcamera = prev.libcamera.overrideAttrs (old: {
         patches = (old.patches or [ ]) ++ [
-          ../webcam-fix-book5/libcamera-bayer-fix/bayer-fix-v0.6.patch
+          ../webcam-fix-book5/libcamera-bayer-fix/bayer-fix-v0.7.patch
         ];
+
         postPatch = (old.postPatch or "") + ''
           # libcamera 0.7.0 does NOT register CameraSensorHelper for OV02C10
           # or OV02E10. Without these helpers, IPASoft's auto-exposure falls
@@ -291,7 +322,13 @@ in
         '';
       });
     })
-  ];
+  ] ++ lib.optional (cfg.nixpkgsUnpatched != null) (
+    # Pin pipewire to the unpatched base to stop the libcamera overlay from
+    # cascading through the Nix fixed-point into every libpipewire consumer.
+    # prev.pipewire inside an overlay is already tainted (it evaluates with
+    # final.libcamera), so the only escape is a truly overlay-free package set.
+    _: _: {pipewire = cfg.nixpkgsUnpatched.pipewire;}
+  );
 
   boot.initrd.kernelModules = [
     "usb_ljca"
@@ -344,7 +381,7 @@ in
     '';
 
     "modprobe.d/99-camera-relay-loopback.conf".text = ''
-      options v4l2loopback devices=1 exclusive_caps=0 card_label="Camera Relay"
+      options v4l2loopback devices=1 exclusive_caps=0 card_label="Built-in Front Camera"
     '';
   } // lib.optionalAttrs wireplumberUsesConf {
     "wireplumber/wireplumber.conf.d/50-disable-ipu7-v4l2.conf".text = wireplumberConfRule;
@@ -364,8 +401,9 @@ in
       RestartSec = 5;
     };
     environment = cameraRelayServiceEnvironment // lib.optionalAttrs cfg.videoFlip {
-      RELAY_COLOR_FILTER = "videoflip method=vertical-flip";
       LIBCAMERA_FORCE_OV02E10_ROTATION = "180";
+    } // lib.optionalAttrs (cfg.relayColorFilter != "") {
+      RELAY_COLOR_FILTER = cfg.relayColorFilter;
     };
   };
 
