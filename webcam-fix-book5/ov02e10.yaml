@@ -22,6 +22,13 @@
 version: 1
 algorithms:
   - BlackLevel:
+      # OV02E10 optical-black pedestal: same 10-bit OmniVision family as the
+      # OV02C10, so the same 64-code (= 4096 in 16-bit) pedestal. Anchors the
+      # black level so the SoftISP's dynamic estimator can't drift toward 0 in
+      # low-light noise and leave the pedestal unsubtracted (gray instead of
+      # black). Value by analogy with the OV02C10 fix confirmed in issue #71;
+      # adjust if a Book5 owner measures a different pedestal.
+      blackLevel: 4096
   - Awb:
   - Ccm:
       ccms:
