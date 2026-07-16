@@ -392,15 +392,20 @@ apply_patch_sed() {
 
     info "Applying bayer order fix..."
 
-    # NEW APPROACH: Don't touch videoFormat (V4L2 rejects format changes).
-    # Instead, only override inputCfg.pixelFormat which goes directly to
-    # the SoftISP debayer. The debayer gets its bayer pattern ENTIRELY from
-    # inputCfg.pixelFormat — it never queries V4L2.
+    # v0.7 approach (issue #62): keep videoFormat matching the sensor's media bus
+    # code — newer IPU7 kernels enforce V4L2 link validation and reject a mismatch
+    # with EPIPE / "Broken pipe" — and feed the SoftISP a separately-computed
+    # ispFormat carrying the true flipped Bayer order instead. This mirrors
+    # bayer-fix-v0.7.patch (the NixOS overlay patch for the same issue); keep the
+    # two in sync.
     #
-    # The patch replaces the single line:
-    #   inputCfg.pixelFormat = pipeConfig->captureFormat;     (v0.5)
-    #   inputCfg.pixelFormat = videoFormat.toPixelFormat();   (v0.6+)
-    # with code that computes the correct bayer order based on sensor transform.
+    # Primary target is the v0.6+ source shape, which already has the
+    #   if (format.code == pipeConfig->code) { ... } else { ... }
+    # bayer block that v0.7 builds on. Very old libcamera (v0.5:
+    #   inputCfg.pixelFormat = pipeConfig->captureFormat;   directly, no
+    # videoFormat/link-validation split) predates the link validation this fix
+    # targets, so it keeps the older heuristic (inputCfg-only override) as a
+    # legacy path.
 
     python3 - "$simple_cpp" << 'PYEOF'
 import sys, re
@@ -431,64 +436,108 @@ replacement_block = r'''{
 
 patched = False
 
-# Try v0.6+ pattern first: inputCfg.pixelFormat = videoFormat.toPixelFormat();
-v06_pattern = r'inputCfg\.pixelFormat\s*=\s*videoFormat\.toPixelFormat\(\)\s*;'
-m = re.search(v06_pattern, content)
+# Try v0.7 structure first (v0.6+ source shape). Split videoFormat
+# (kernel-facing, must match the sensor's media bus code or newer IPU7 kernels
+# reject the link with EPIPE / "Broken pipe") from ispFormat (SoftISP-facing,
+# carries the corrected flipped Bayer order). This mirrors bayer-fix-v0.7.patch,
+# the NixOS overlay patch for the same issue — keep both in sync (issue #62).
+#
+# The OV02E10 primary path (format.code == pipeConfig->code) is behaviourally
+# identical to the older v0.6 patch: videoFormat stays the bus code, and the
+# SoftISP gets (bus order ^ HFlip). The change is that the *else* branch (sensor
+# actually changed its bus code) now mirrors the already-corrected videoFormat
+# instead of XOR-ing HFlip a second time on top of it.
+decl_pattern = (
+    r'(V4L2PixelFormat\s+videoFormat;\s*\n)'
+    r'(\s*)if\s*\(format\.code == pipeConfig->code\)\s*\{\s*\n'
+    r'(\s*)videoFormat = video->toV4L2PixelFormat\(pipeConfig->captureFormat\);\s*\n'
+    r'(\s*)\}\s*else\s*\{'
+)
+m = re.search(decl_pattern, content)
 if m:
-    # Get the indentation
-    line_start = content.rfind('\n', 0, m.start()) + 1
-    indent = re.match(r'^(\s*)', content[line_start:]).group(1)
+    outer_indent = m.group(2)
+    inner_indent = m.group(3)
+    close_indent = m.group(4)
 
-    block = replacement_block.replace('ORIGINAL_EXPR', 'videoFormat.toPixelFormat()')
-    # Fix indentation - use actual indent from source
-    block = block.replace('\\t', '\t')
-    lines = block.split('\n')
-    indented = '\n'.join(indent + line.lstrip('{').rstrip('}') if i > 0 and i < len(lines)-1
-                         else line for i, line in enumerate(lines))
-
-    # Actually, let's just do a clean replacement
-    new_code = (
-        f'/*\n'
-        f'{indent} * Override bayer order for SoftISP based on actual sensor transform.\n'
-        f'{indent} * OV02E10 sets MODIFY_LAYOUT but never updates format code.\n'
-        f'{indent} * bayerOrder() uses standard CFA XOR (HFlip=bit0, VFlip=bit1) but\n'
-        f'{indent} * OV02E10 only shifts the bayer pattern for HFlip, not VFlip.\n'
-        f'{indent} * We XOR the native order with just the HFlip component (bit 0).\n'
-        f'{indent} * Set LIBCAMERA_BAYER_ORDER=0..3 to manually override (BGGR/GBRG/GRBG/RGGB).\n'
-        f'{indent} */\n'
-        f'{indent}BayerFormat inputBayer = BayerFormat::fromPixelFormat(videoFormat.toPixelFormat());\n'
-        f'{indent}if (inputBayer.isValid()) {{\n'
-        f'{indent}\tBayerFormat::Order origOrder = inputBayer.order;\n'
-        f'{indent}\tconst char *bayerEnv = std::getenv("LIBCAMERA_BAYER_ORDER");\n'
-        f'{indent}\tif (bayerEnv) {{\n'
-        f'{indent}\t\tint bo = std::atoi(bayerEnv);\n'
-        f'{indent}\t\tif (bo >= 0 && bo <= 3)\n'
-        f'{indent}\t\t\tinputBayer.order = static_cast<BayerFormat::Order>(bo);\n'
-        f'{indent}\t}} else {{\n'
-        f'{indent}\t\t/* OV02E10: HFlip shifts bayer by 1 in X, VFlip does not\n'
-        f'{indent}\t\t * shift (even readout window height). Only XOR with bit 0\n'
-        f'{indent}\t\t * of the transform (HFlip component). */\n'
-        f'{indent}\t\tint t = static_cast<int>(config->combinedTransform()) & 1;\n'
-        f'{indent}\t\tinputBayer.order = static_cast<BayerFormat::Order>(\n'
-        f'{indent}\t\t\tstatic_cast<int>(origOrder) ^ t);\n'
-        f'{indent}\t}}\n'
-        f'{indent}\tLOG(SimplePipeline, Warning)\n'
-        f'{indent}\t\t<< "[BAYER-FIX] transform="\n'
-        f'{indent}\t\t<< static_cast<int>(config->combinedTransform())\n'
-        f'{indent}\t\t<< " origOrder=" << static_cast<int>(origOrder)\n'
-        f'{indent}\t\t<< " newOrder=" << static_cast<int>(inputBayer.order)\n'
-        f'{indent}\t\t<< " origFmt=" << videoFormat.toPixelFormat()\n'
-        f'{indent}\t\t<< " newFmt=" << inputBayer.toPixelFormat()\n'
-        f'{indent}\t\t<< " override=" << (bayerEnv ? bayerEnv : "auto");\n'
-        f'{indent}\tinputCfg.pixelFormat = inputBayer.toPixelFormat();\n'
-        f'{indent}}} else {{\n'
-        f'{indent}\tinputCfg.pixelFormat = videoFormat.toPixelFormat();\n'
-        f'{indent}}}'
+    if_isp_block = (
+        f'{inner_indent}/*\n'
+        f'{inner_indent} * The sensor may have flipped its physical Bayer readout without\n'
+        f'{inner_indent} * updating the media bus code. Keep videoFormat matching the bus\n'
+        f'{inner_indent} * code so kernel link validation passes (newer IPU7 kernels reject\n'
+        f'{inner_indent} * a mismatch with EPIPE / "Broken pipe"), and feed the SoftISP a\n'
+        f'{inner_indent} * separate ispFormat carrying the true flipped order.\n'
+        f'{inner_indent} *\n'
+        f'{inner_indent} * OV02E10 shifts its Bayer pattern for HFlip only, not VFlip\n'
+        f'{inner_indent} * (confirmed on 940XHA/960XHA). bayerOrder() XORs both flip bits,\n'
+        f'{inner_indent} * which is wrong once VFlip is in the composed transform (e.g.\n'
+        f'{inner_indent} * a Rot180 mounting correction) — XOR only the HFlip bit there.\n'
+        f'{inner_indent} * Set LIBCAMERA_BAYER_ORDER=0..3 to force BGGR/GBRG/GRBG/RGGB.\n'
+        f'{inner_indent} */\n'
+        f'{inner_indent}BayerFormat cfgBayer = BayerFormat::fromPixelFormat(pipeConfig->captureFormat);\n'
+        f'{inner_indent}if (cfgBayer.isValid()) {{\n'
+        f'{inner_indent}\tBayerFormat::Order origOrder = cfgBayer.order;\n'
+        f'{inner_indent}\tconst char *bayerEnv = std::getenv("LIBCAMERA_BAYER_ORDER");\n'
+        f'{inner_indent}\tif (bayerEnv) {{\n'
+        f'{inner_indent}\t\tint bo = std::atoi(bayerEnv);\n'
+        f'{inner_indent}\t\tif (bo >= 0 && bo <= 3)\n'
+        f'{inner_indent}\t\t\tcfgBayer.order = static_cast<BayerFormat::Order>(bo);\n'
+        f'{inner_indent}\t}} else if (data->sensor_->model() == "ov02e10") {{\n'
+        f'{inner_indent}\t\tcfgBayer.order = static_cast<BayerFormat::Order>(\n'
+        f'{inner_indent}\t\t\tstatic_cast<int>(origOrder) ^\n'
+        f'{inner_indent}\t\t\t(static_cast<int>(config->combinedTransform()) & 1));\n'
+        f'{inner_indent}\t}} else {{\n'
+        f'{inner_indent}\t\tcfgBayer.order = data->sensor_->bayerOrder(config->combinedTransform());\n'
+        f'{inner_indent}\t}}\n'
+        f'{inner_indent}\tispFormat = cfgBayer.toV4L2PixelFormat();\n'
+        f'{inner_indent}\tLOG(SimplePipeline, Warning)\n'
+        f'{inner_indent}\t\t<< "[BAYER-FIX] transform="\n'
+        f'{inner_indent}\t\t<< static_cast<int>(config->combinedTransform())\n'
+        f'{inner_indent}\t\t<< " origOrder=" << static_cast<int>(origOrder)\n'
+        f'{inner_indent}\t\t<< " newOrder=" << static_cast<int>(cfgBayer.order)\n'
+        f'{inner_indent}\t\t<< " model=" << data->sensor_->model()\n'
+        f'{inner_indent}\t\t<< " override=" << (bayerEnv ? bayerEnv : "auto");\n'
+        f'{inner_indent}}} else {{\n'
+        f'{inner_indent}\tispFormat = videoFormat;\n'
+        f'{inner_indent}}}\n'
     )
 
-    result = content[:m.start()] + new_code + content[m.end():]
+    new_block = (
+        f'{m.group(1)}{outer_indent}V4L2PixelFormat ispFormat;\n'
+        f'{outer_indent}if (format.code == pipeConfig->code) {{\n'
+        f'{inner_indent}videoFormat = video->toV4L2PixelFormat(pipeConfig->captureFormat);\n'
+        f'{if_isp_block}'
+        f'{close_indent}}} else {{'
+    )
+    content = content[:m.start()] + new_block + content[m.end():]
+
+    # else branch (sensor changed its bus code): videoFormat already carries the
+    # corrected order — mirror it into ispFormat rather than recomputing.
+    else_pattern = r'videoFormat = cfgBayer\.toV4L2PixelFormat\(\);\s*\n(\s*)\}'
+    em = re.search(else_pattern, content[m.start():])
+    if em:
+        abs_start = m.start() + em.start()
+        abs_end = m.start() + em.end()
+        line_start = content.rfind('\n', 0, abs_start) + 1
+        stmt_indent = re.match(r'^(\s*)', content[line_start:]).group(1)
+        content = content[:abs_start] + (
+            f'videoFormat = cfgBayer.toV4L2PixelFormat();\n'
+            f'{stmt_indent}ispFormat = videoFormat;\n'
+            f'{em.group(1)}}}'
+        ) + content[abs_end:]
+    else:
+        print("WARNING: could not mirror else-branch videoFormat into ispFormat", file=sys.stderr)
+
+    # Feed the SoftISP the corrected ispFormat instead of the raw videoFormat.
+    content, n = re.subn(
+        r'inputCfg\.pixelFormat\s*=\s*videoFormat\.toPixelFormat\(\)\s*;',
+        'inputCfg.pixelFormat = ispFormat.toPixelFormat();', content, count=1)
+    if n == 0:
+        print("ERROR: could not redirect inputCfg.pixelFormat to ispFormat", file=sys.stderr)
+        sys.exit(1)
+
+    result = content
     patched = True
-    print("Patched v0.6+ inputCfg.pixelFormat with bayer order override + diagnostics")
+    print("Patched v0.7-style: videoFormat stays bus-code-matched, ispFormat feeds the SoftISP")
 
 # Try v0.5 pattern: inputCfg.pixelFormat = pipeConfig->captureFormat;
 if not patched:
@@ -542,13 +591,13 @@ if not patched:
         print("Patched v0.5 inputCfg.pixelFormat with bayer order override")
 
 if not patched:
-    # Check if already patched
-    if 'inputBayer.order' in content and 'bayerOrder' in content:
-        print("Source appears already patched (inputBayer.order + bayerOrder found)")
+    # Check if already patched (v0.7 ispFormat split, or the older inputBayer form)
+    if 'ispFormat' in content or ('inputBayer.order' in content and 'bayerOrder' in content):
+        print("Source appears already patched (ispFormat or inputBayer.order found)")
         result = content
     else:
         print("ERROR: Could not find inputCfg.pixelFormat assignment to patch", file=sys.stderr)
-        print("Searched for both v0.5 and v0.6+ patterns.", file=sys.stderr)
+        print("Searched for the v0.7 videoFormat/ispFormat split and the legacy v0.5 pattern.", file=sys.stderr)
         sys.exit(1)
 
 # ── Second patch: Add diagnostic LOG at converter_/swIsp_ dispatch ──
@@ -803,10 +852,10 @@ echo ""
 
 # Step 5: Verify patch
 info "Verifying patch..."
-if grep -q 'inputBayer.order' "$BUILD_DIR/libcamera/src/libcamera/pipeline/simple/simple.cpp"; then
+if grep -qE 'ispFormat|inputBayer\.order' "$BUILD_DIR/libcamera/src/libcamera/pipeline/simple/simple.cpp"; then
     ok "Patch verified — bayer order override for SoftISP debayer present."
 else
-    die "Patch verification failed — inputBayer.order not found in patched source."
+    die "Patch verification failed — neither ispFormat nor inputBayer.order found in patched source."
 fi
 echo ""
 
