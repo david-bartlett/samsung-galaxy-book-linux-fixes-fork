@@ -60,7 +60,16 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIBCAMERA_MIN_VER="0.7.0"
-LIBCAMERA_BUILD_VER="v0.7.0"
+# Build 0.7.2, not 0.7.0. libcamera 0.7.0's SoftISP AGC has a bug that breaks
+# auto-exposure: soft_simple.cpp computes `again10 = camHelper_->gain(1.0)`, but
+# gain() takes an integer hardware code, so the float 1.0 truncates to 1 and
+# again10 becomes ~0.0625x. The AGC "too bright" branch then always chooses to
+# reduce gain (already at min) and never reduces exposure, so a bright scene stays
+# blown out to pure white. Fixed upstream in v0.7.1 (commit 02277d4c). 0.7.2 keeps
+# the same libcamera.so.0.7 soname, and being a higher patch than the 0.7.0 some
+# distros ship, ldconfig prefers our build for direct-libcamera apps too — closing
+# the long-standing gap where cam/Snapshot hit the distro lib. (issue #71)
+LIBCAMERA_BUILD_VER="v0.7.2"
 LIBCAMERA_BUILD_DIR="/tmp/libcamera-ipu6-build"
 
 echo "=============================================="

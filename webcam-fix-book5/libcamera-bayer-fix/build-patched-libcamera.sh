@@ -214,6 +214,18 @@ detect_libcamera_version() {
 
     # Map to git tag
     LIBCAMERA_GIT_TAG="v${ver_clean}"
+
+    # Floor 0.7.0 to 0.7.2. libcamera 0.7.0's SoftISP AGC breaks auto-exposure
+    # (again10 = gain(1.0) truncates the float to the integer code 1 -> ~0.0625x,
+    # so the "too bright" branch never lowers exposure and bright scenes blow out
+    # to white). Fixed in 0.7.1 (commit 02277d4c). 0.7.2 shares the 0.7 soname, so
+    # building it in place of 0.7.0 is safe and also wins the ldconfig tie for
+    # direct-libcamera apps. (issue #71)
+    if [[ "$ver_clean" == "0.7.0" ]]; then
+        info "Distro libcamera is 0.7.0, which has the SoftISP auto-exposure bug — building 0.7.2 instead (issue #71)."
+        LIBCAMERA_GIT_TAG="v0.7.2"
+        LIBCAMERA_VERSION_CLEAN="0.7.2"
+    fi
 }
 
 # ─── Install build dependencies ──────────────────────────────────────
