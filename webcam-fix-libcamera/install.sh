@@ -987,6 +987,35 @@ cleanup_stale_local_libcamera() {
     fi
 }
 
+# camera-relay's pipeline IS gst-launch-1.0, and every libcamerasrc probe in this
+# installer shells out to gst-inspect-1.0. On Debian/Ubuntu both live in
+# gstreamer1.0-tools, which gstreamer1.0-libcamera does NOT depend on — so a
+# desktop install can easily lack them. When they are missing every probe exits
+# 127 and reads as "libcamerasrc is broken", which aborts the install below on a
+# false premise and later makes the relay tell users to reinstall a libcamera
+# plugin they already have (issue #65).
+ensure_gst_tools() {
+    if command -v gst-launch-1.0 &>/dev/null && command -v gst-inspect-1.0 &>/dev/null; then
+        return 0
+    fi
+    echo "  Installing GStreamer command-line tools..."
+    case "$DISTRO" in
+        fedora) sudo dnf install -y gstreamer1 2>/dev/null || true ;;
+        arch)   sudo pacman -S --needed --noconfirm gstreamer 2>/dev/null || true ;;
+        ubuntu|debian) sudo apt-get install -y gstreamer1.0-tools 2>/dev/null || true ;;
+    esac
+    if ! command -v gst-launch-1.0 &>/dev/null || ! command -v gst-inspect-1.0 &>/dev/null; then
+        echo ""
+        echo "ERROR: gst-launch-1.0 / gst-inspect-1.0 are still not available."
+        echo "       The camera relay is built on them and cannot run without them."
+        echo "       Install manually and re-run:"
+        echo "         Fedora:        sudo dnf install gstreamer1"
+        echo "         Arch:          sudo pacman -S gstreamer"
+        echo "         Ubuntu/Debian: sudo apt install gstreamer1.0-tools"
+        exit 1
+    fi
+}
+
 # Verify the libcamera setup is functional before continuing. Silent failures
 # here are what created issue #45: a source build was installed to /usr/local
 # but the gst plugin wouldn't load, so the relay was permanently broken.
@@ -1083,7 +1112,9 @@ fi
 
 # Sanity check: after whichever path we took, libcamerasrc must actually load.
 # This catches the issue #45 scenario where a source build silently produced an
-# unloadable libgstlibcamera.so.
+# unloadable libgstlibcamera.so. Make sure gst-inspect-1.0 exists first, or the
+# check below fails for the wrong reason (issue #65).
+ensure_gst_tools
 if ! verify_libcamerasrc; then
     echo ""
     echo "ERROR: GStreamer 'libcamerasrc' element is not loadable."
@@ -1482,6 +1513,10 @@ _relay_home=$(getent passwd "$_relay_user" | cut -d: -f6)
 RELAY_DIR="$SCRIPT_DIR/../camera-relay"
 
 if [[ -d "$RELAY_DIR" ]]; then
+    # gst-launch-1.0/gst-inspect-1.0 must exist before the probe below, or it
+    # exits 127 and misreads as "libcamerasrc missing" (issue #65).
+    ensure_gst_tools
+
     # Install GStreamer libcamerasrc element if not present
     if ! gst-inspect-1.0 libcamerasrc &>/dev/null 2>&1; then
         echo "  Installing GStreamer libcamera plugin..."
@@ -1494,6 +1529,9 @@ if [[ -d "$RELAY_DIR" ]]; then
                 sudo pacman -S --needed --noconfirm gst-plugin-libcamera 2>/dev/null || true
                 ;;
             ubuntu|debian)
+                # libcamerasrc ships in gstreamer1.0-libcamera on Ubuntu/Debian,
+                # not in gstreamer1.0-plugins-bad — try the correct package first.
+                sudo apt-get install -y gstreamer1.0-libcamera 2>/dev/null || \
                 sudo apt-get install -y gstreamer1.0-plugins-bad 2>/dev/null || true
                 ;;
         esac

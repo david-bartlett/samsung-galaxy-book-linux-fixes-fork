@@ -365,6 +365,24 @@ Replace `/dev/video0` with your camera device (e.g. `/dev/video32` for the relay
 
 ## Troubleshooting
 
+### `camera-relay start` says `libcamerasrc element not found` — but it's installed
+
+If the plugin package is already the newest version and
+`gst-launch-1.0 libcamerasrc ! videoconvert ! autovideosink` shows a working
+picture, the missing piece is the **GStreamer command-line tools**, not the
+libcamera plugin. `gst-launch-1.0` *is* the relay pipeline, and it ships
+separately from `gstreamer1.0-libcamera`:
+
+```bash
+sudo apt install gstreamer1.0-tools     # Ubuntu/Debian
+sudo dnf install gstreamer1             # Fedora
+sudo pacman -S gstreamer                # Arch
+camera-relay start
+```
+
+Current installers pull this in automatically; installs made before that need it
+by hand. (issue #65)
+
 ### `cam -l` shows no cameras
 
 1. Verify LJCA modules are loaded: `lsmod | grep ljca`

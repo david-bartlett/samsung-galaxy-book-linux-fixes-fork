@@ -843,6 +843,26 @@ SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 RELAY_DIR="$SCRIPT_DIR/../camera-relay"
 
 if [[ -d "$RELAY_DIR" ]]; then
+    # Install the GStreamer command-line tools first. camera-relay's pipeline IS
+    # gst-launch-1.0, and gst-inspect-1.0 is what the probe below (and the relay
+    # itself) uses to find libcamerasrc. On Debian/Ubuntu they live in
+    # gstreamer1.0-tools, which gstreamer1.0-libcamera does NOT depend on, so a
+    # desktop install can easily lack them. Without this the probe below exits
+    # 127 and misreads as "libcamerasrc missing" (issue #65).
+    if ! command -v gst-launch-1.0 &>/dev/null || ! command -v gst-inspect-1.0 &>/dev/null; then
+        echo "  Installing GStreamer command-line tools..."
+        if [[ "$DISTRO" == "fedora" ]]; then
+            sudo dnf install -y gstreamer1 2>/dev/null || true
+        elif [[ "$DISTRO" == "arch" ]]; then
+            sudo pacman -S --needed --noconfirm gstreamer 2>/dev/null || true
+        elif [[ "$DISTRO" == "ubuntu" ]]; then
+            sudo apt install -y gstreamer1.0-tools 2>/dev/null || true
+        fi
+        if ! command -v gst-launch-1.0 &>/dev/null; then
+            echo "  ⚠ gst-launch-1.0 still unavailable — camera-relay cannot run without it."
+        fi
+    fi
+
     # Install GStreamer libcamerasrc element if not present
     if ! gst-inspect-1.0 libcamerasrc &>/dev/null 2>&1; then
         echo "  Installing GStreamer libcamera plugin..."
@@ -852,6 +872,9 @@ if [[ -d "$RELAY_DIR" ]]; then
         elif [[ "$DISTRO" == "arch" ]]; then
             sudo pacman -S --needed --noconfirm gst-plugin-libcamera 2>/dev/null || true
         elif [[ "$DISTRO" == "ubuntu" ]]; then
+            # libcamerasrc ships in gstreamer1.0-libcamera on Ubuntu/Debian, not
+            # in gstreamer1.0-plugins-bad — try the correct package first.
+            sudo apt install -y gstreamer1.0-libcamera 2>/dev/null || \
             sudo apt install -y gstreamer1.0-plugins-bad 2>/dev/null || true
         fi
     fi

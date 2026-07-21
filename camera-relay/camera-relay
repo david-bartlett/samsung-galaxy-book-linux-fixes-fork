@@ -288,7 +288,47 @@ detect_ipa_path() {
     return 1
 }
 
+# The relay pipeline IS gst-launch-1.0, and gst-inspect-1.0 is how we probe for
+# libcamerasrc. Both ship in a package of their own (gstreamer1.0-tools on
+# Debian/Ubuntu) that nothing else here pulls in — gstreamer1.0-libcamera does
+# not depend on it. Check for them explicitly: without this, a missing
+# gst-inspect-1.0 exits 127 and every probe below reads as "libcamerasrc not
+# found", sending users to reinstall a libcamera plugin they already have
+# (issue #65).
+require_gst_tools() {
+    local missing=()
+    command -v gst-inspect-1.0 &>/dev/null || missing+=("gst-inspect-1.0")
+    command -v gst-launch-1.0 &>/dev/null || missing+=("gst-launch-1.0")
+    (( ${#missing[@]} == 0 )) && return 0
+    die "GStreamer command-line tools not found (missing: ${missing[*]}).
+The relay pipeline is built on gst-launch-1.0, so it cannot run without them:
+  Fedora:        sudo dnf install gstreamer1
+  Arch:          sudo pacman -S gstreamer
+  Ubuntu/Debian: sudo apt install gstreamer1.0-tools"
+}
+
+# Path of an installed libcamera GStreamer plugin, if any. Used to tell
+# "the package is missing" apart from "the package is there but GStreamer
+# refuses to load it" — two problems with completely different fixes.
+find_libcamera_gst_plugin() {
+    local so
+    for so in /usr/lib/*/gstreamer-1.0/libgstlibcamera.so \
+              /usr/lib64/gstreamer-1.0/libgstlibcamera.so \
+              /usr/lib/gstreamer-1.0/libgstlibcamera.so \
+              /usr/local/lib/*/gstreamer-1.0/libgstlibcamera.so \
+              /usr/local/lib64/gstreamer-1.0/libgstlibcamera.so \
+              /usr/local/lib/gstreamer-1.0/libgstlibcamera.so; do
+        if [[ -f "$so" ]]; then
+            echo "$so"
+            return 0
+        fi
+    done
+    return 1
+}
+
 setup_environment() {
+    require_gst_tools
+
     # Save current env so we can roll back if the /usr/local override breaks things
     local saved_ld_library_path="${LD_LIBRARY_PATH:-}"
     local saved_gst_plugin_path="${GST_PLUGIN_PATH:-}"
@@ -343,10 +383,32 @@ setup_environment() {
                 rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/gstreamer-1.0" 2>/dev/null || true
             fi
             if ! gst-inspect-1.0 libcamerasrc &>/dev/null; then
+                # Show what GStreamer actually complained about, and don't tell
+                # people to install a package that is demonstrably already on
+                # disk — that dead end is the whole of issue #65.
+                local inspect_err plugin_so
+                # gst-inspect-1.0 exits non-zero here by definition; without the
+                # `|| true` pipefail would abort the script before it can report.
+                inspect_err=$(gst-inspect-1.0 libcamerasrc 2>&1 >/dev/null | tail -5) || true
+                if plugin_so=$(find_libcamera_gst_plugin); then
+                    die "GStreamer 'libcamerasrc' element not found, but the plugin IS installed:
+  $plugin_so
+So the package is fine and something is stopping GStreamer from loading it.
+Try, in order:
+  rm -rf ~/.cache/gstreamer-1.0     # stale or blacklisted registry entry
+  ldd $plugin_so | grep 'not found'
+  gst-inspect-1.0 --gst-debug=GST_PLUGIN_LOADING:5 libcamerasrc 2>&1 | tail -30
+${inspect_err:+
+gst-inspect-1.0 said:
+$inspect_err}"
+                fi
                 die "GStreamer 'libcamerasrc' element not found. Install it:
   Fedora:        sudo dnf install gstreamer1-plugin-libcamera
   Arch:          sudo pacman -S gst-plugin-libcamera
-  Ubuntu/Debian: sudo apt install gstreamer1.0-libcamera"
+  Ubuntu/Debian: sudo apt install gstreamer1.0-libcamera
+${inspect_err:+
+gst-inspect-1.0 said:
+$inspect_err}"
             fi
             info "Using system libcamerasrc"
         else
@@ -644,6 +706,10 @@ cmd_status() {
     [[ -z "$camera" ]] && camera=$(detect_camera_name 2>/dev/null) || true
     [[ -z "$camera" ]] && camera="(not detected)"
     device=$(cat "$DEVICE_CACHE" 2>/dev/null) || device=""
+    # Fall back to a live probe like the camera line above does. Reading only
+    # the cache reported "(not loaded)" whenever the relay had never started,
+    # even with v4l2loopback loaded and a device present (issue #65).
+    [[ -z "$device" ]] && device=$(detect_loopback_device 2>/dev/null) || true
     [[ -z "$device" ]] && device="(not loaded)"
     state=$(cat "$STATE_CACHE" 2>/dev/null) || state="stopped"
     $running || state="stopped"
@@ -707,6 +773,11 @@ cmd_enable_persistent() {
             *) info "Cancelled"; return 1 ;;
         esac
     fi
+
+    # The validation ladder below probes with gst-inspect-1.0; if that binary is
+    # absent every probe "fails" and we would silently bake system-only paths
+    # into the unit for a relay that cannot run at all (issue #65).
+    require_gst_tools
 
     # Detect paths for the service environment
     local ipa_path="" gst_path="" lib_path="" softisp_mode=""
