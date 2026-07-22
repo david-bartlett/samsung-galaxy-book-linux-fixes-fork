@@ -534,7 +534,11 @@ cmd_start() {
     info "Camera:   $camera_name"
     info "Loopback: $loopback_dev"
 
-    local gst_log="${XDG_RUNTIME_DIR:-/tmp}/camera-relay.log"
+    # Must match the log start_pipeline actually writes to. It used to say
+    # camera-relay.log — the on-demand daemon's log — so a failed always-on
+    # pipeline printed "GStreamer output:" followed by nothing at all, or by
+    # lines from an unrelated run (issue #65).
+    local gst_log="${XDG_RUNTIME_DIR:-/tmp}/camera-relay-gst.log"
 
     if $foreground; then
         info "Starting relay (foreground)..."
@@ -556,7 +560,10 @@ cmd_start() {
             echo "" >&2
             echo "ERROR: Relay failed to start. GStreamer output:" >&2
             echo "───────────────────────────────────────────────" >&2
-            tail -20 "$gst_log" 2>/dev/null >&2 || true
+            # Order matters: `2>/dev/null >&2` points fd 2 at /dev/null and then
+            # duplicates *that* onto fd 1, so tail's output was discarded — the
+            # second half of why this block printed an empty banner (issue #65).
+            tail -20 "$gst_log" >&2 2>/dev/null || true
             echo "───────────────────────────────────────────────" >&2
             echo "" >&2
             echo "Common causes:" >&2
@@ -739,6 +746,179 @@ cmd_status() {
     fi
 }
 
+# One-shot report covering every layer between the sensor and the browser.
+# Issue #65 took six round trips because "the relay starts but the browser sees
+# nothing" had no single command that could tell those layers apart: a working
+# `gst-launch ... autovideosink` proves the camera, and `lsmod` proves the
+# module, but neither says whether frames are reaching the loopback — which is
+# the one fact that decides whether the bug is ours or the browser's.
+# Changes no state, never exits non-zero, and is meant to be pasted whole.
+cmd_doctor() {
+    local rt="${XDG_RUNTIME_DIR:-/tmp}"
+
+    echo "camera-relay doctor — paste this whole block into a bug report"
+    echo "=============================================================="
+
+    echo
+    echo "── System ──"
+    echo "  Distro:  $(grep -oP '^PRETTY_NAME="\K[^"]+' /etc/os-release 2>/dev/null || echo unknown)"
+    echo "  Kernel:  $(uname -r)"
+    echo "  Session: ${XDG_SESSION_TYPE:-unknown}"
+    # No pipeline here on purpose: `... | grep -q` makes grep exit on the first
+    # match, SIGPIPEs the writer, and `set -o pipefail` then reports the whole
+    # test as false. The same trap is why the module check below reads
+    # /proc/modules directly instead of piping lsmod.
+    if [[ " $(id -nG 2>/dev/null) " == *" video "* ]]; then
+        echo "  Groups:  video group OK"
+    else
+        echo "  Groups:  NOT in the 'video' group — sudo usermod -aG video $USER, then log out and back in"
+    fi
+
+    echo
+    echo "── Tools ──"
+    local t missing_tools=()
+    for t in gst-inspect-1.0 gst-launch-1.0 v4l2-ctl; do
+        if command -v "$t" &>/dev/null; then
+            echo "  $t: $(command -v "$t")"
+        else
+            echo "  $t: MISSING"
+            missing_tools+=("$t")
+        fi
+    done
+    if (( ${#missing_tools[@]} > 0 )); then
+        echo "  install: gstreamer1.0-tools + v4l-utils (Debian/Ubuntu),"
+        echo "           gstreamer1 + v4l-utils (Fedora), gstreamer + v4l-utils (Arch)"
+    fi
+
+    echo
+    echo "── libcamera ──"
+    echo "  version: $(pkg-config --modversion libcamera 2>/dev/null || echo '(libcamera-dev/pkg-config not installed)')"
+    local cam_name plugin_so
+    if cam_name=$(detect_camera_name 2>/dev/null); then
+        echo "  camera:  $cam_name"
+    else
+        echo "  camera:  NOT DETECTED"
+    fi
+    if plugin_so=$(find_libcamera_gst_plugin); then
+        echo "  gst plugin: $plugin_so"
+    else
+        echo "  gst plugin: no libgstlibcamera.so found on disk"
+    fi
+    if command -v gst-inspect-1.0 &>/dev/null; then
+        if gst-inspect-1.0 libcamerasrc &>/dev/null; then
+            echo "  libcamerasrc: loads OK"
+        else
+            echo "  libcamerasrc: WILL NOT LOAD —"
+            { gst-inspect-1.0 libcamerasrc 2>&1 >/dev/null | tail -5 | sed 's/^/    /'; } || true
+        fi
+    fi
+
+    echo
+    echo "── v4l2loopback ──"
+    if grep -q '^v4l2loopback ' /proc/modules 2>/dev/null; then
+        echo "  module: loaded"
+    else
+        echo "  module: NOT LOADED"
+    fi
+    local dev=""
+    if dev=$(detect_loopback_device 2>/dev/null); then
+        echo "  device: $dev ($(cat "/sys/class/video4linux/$(basename "$dev")/name" 2>/dev/null || echo '?'))"
+        if command -v v4l2-ctl &>/dev/null; then
+            echo "  current format:"
+            { v4l2-ctl -d "$dev" -V 2>&1 | sed 's/^/    /'; } || true
+        fi
+    else
+        echo "  device: NONE FOUND — nothing for apps to open"
+    fi
+
+    echo
+    echo "── Relay ──"
+    { cmd_status 2>&1 | sed 's/^/  /'; } || true
+    if [[ -x "$MONITOR_BIN" ]]; then
+        echo "  monitor binary: $MONITOR_BIN"
+    else
+        echo "  monitor binary: MISSING ($MONITOR_BIN) — on-demand mode cannot start"
+    fi
+    if systemctl --user cat "$SERVICE_NAME" &>/dev/null; then
+        # is-enabled/is-active print their answer AND exit non-zero when the
+        # answer is negative, so `|| echo ...` would print it a second time.
+        echo "  service: $(systemctl --user is-enabled "$SERVICE_NAME" 2>/dev/null || true)/$(systemctl --user is-active "$SERVICE_NAME" 2>/dev/null || true)"
+    else
+        echo "  service: not installed"
+    fi
+
+    # The decisive check. Everything above can look healthy while the loopback
+    # carries nothing, which is indistinguishable from a broken camera when all
+    # you have to go on is the browser saying "no camera".
+    echo
+    echo "── Frames on the loopback ──"
+    if [[ -z "$dev" ]]; then
+        echo "  skipped: no loopback device"
+    elif ! command -v v4l2-ctl &>/dev/null; then
+        echo "  skipped: v4l2-ctl not installed (v4l-utils)"
+    else
+        # Keep only the tail of the stream: the first frames of an on-demand
+        # start are the monitor's black placeholders while the pipeline spins up.
+        local frame="$rt/camera-relay-doctor-frame.bin"
+        timeout 15 v4l2-ctl -d "$dev" --stream-mmap --stream-count=60 \
+            --stream-to=- 2>/dev/null | tail -c 262144 > "$frame" || true
+        local size=0
+        [[ -f "$frame" ]] && size=$(stat -c %s "$frame" 2>/dev/null || echo 0)
+        if (( size == 0 )); then
+            echo "  NO FRAMES — the device exists but nothing is writing to it."
+            echo "  → the relay is not feeding the loopback. Check the logs below."
+        else
+            local distinct
+            distinct=$(od -An -tu1 "$frame" 2>/dev/null | tr -s ' ' '\n' \
+                | sed '/^$/d' | sort -u | wc -l) || distinct=0
+            if (( distinct <= 4 )); then
+                echo "  BLANK FRAMES — $size bytes captured, only $distinct distinct byte values."
+                echo "  → apps can open the device but the picture is uniform (black)."
+                echo "    The relay is holding the device open; the camera pipeline is not producing."
+            else
+                echo "  REAL PICTURE — $size bytes captured, $distinct distinct byte values."
+                echo "  → the relay side is working end to end. If a browser still shows no"
+                echo "    camera, the problem is browser-side (see below), not the relay."
+            fi
+        fi
+        rm -f "$frame"
+    fi
+
+    echo
+    echo "── Browsers ──"
+    local b bpath
+    for b in firefox chromium chromium-browser brave-browser google-chrome; do
+        bpath=$(command -v "$b" 2>/dev/null) || continue
+        if command -v snap &>/dev/null && snap list "$b" &>/dev/null; then
+            echo "  $b: snap — confined; needs 'snap connect $b:camera'"
+        else
+            echo "  $b: $bpath"
+        fi
+    done
+    if command -v flatpak &>/dev/null; then
+        { flatpak list --app --columns=application 2>/dev/null \
+            | grep -iE 'firefox|chrom|brave' | sed 's/^/  flatpak: /; s/$/ — needs --device=all/'; } || true
+    fi
+
+    echo
+    echo "── Recent logs ──"
+    local lf
+    for lf in "$rt/camera-relay-gst.log" "$rt/camera-relay.log"; do
+        if [[ -s "$lf" ]]; then
+            echo "  $lf (last 15 lines):"
+            { tail -15 "$lf" 2>/dev/null | sed 's/^/    /'; } || true
+        else
+            echo "  $lf: empty or missing"
+        fi
+    done
+    if systemctl --user cat "$SERVICE_NAME" &>/dev/null; then
+        echo "  systemctl --user status $SERVICE_NAME:"
+        { systemctl --user status "$SERVICE_NAME" --no-pager -n 15 2>&1 | sed 's/^/    /'; } || true
+    fi
+
+    return 0
+}
+
 cmd_enable_persistent() {
     local skip_confirm=false
     [[ "${1:-}" == "--yes" ]] && skip_confirm=true
@@ -894,6 +1074,7 @@ Commands:
   stop                  Stop the camera relay
   status                Show relay status
   status --json         Show status as JSON
+  doctor                Full diagnostic report (paste this into a bug report)
   enable-persistent     Auto-start on-demand relay on login
   enable-persistent --yes  Skip confirmation prompt
   disable-persistent    Remove auto-start
@@ -911,6 +1092,7 @@ case "${1:-}" in
     start)              cmd_start "${2:-}" ;;
     stop)               cmd_stop ;;
     status)             cmd_status "${2:-}" ;;
+    doctor)             cmd_doctor ;;
     enable-persistent)  cmd_enable_persistent "${2:-}" ;;
     disable-persistent) cmd_disable_persistent ;;
     -h|--help|help)     usage ;;

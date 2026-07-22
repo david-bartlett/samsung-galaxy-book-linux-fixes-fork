@@ -365,6 +365,28 @@ Replace `/dev/video0` with your camera device (e.g. `/dev/video32` for the relay
 
 ## Troubleshooting
 
+### Start here: `camera-relay doctor`
+
+```bash
+camera-relay doctor
+```
+
+One command, one block of output, covering every layer between the sensor and
+the browser: tools, libcamera, the loopback device, relay state, the systemd
+unit, recent GStreamer logs, and browser sandboxing. The section that matters
+most is **Frames on the loopback**, which grabs a live frame and reports one of:
+
+| Result | Meaning |
+| --- | --- |
+| `NO FRAMES` | The device exists but nothing is writing to it — the relay is not running or its pipeline died. Read the logs printed below it. |
+| `BLANK FRAMES` | Apps can open the device but the picture is uniform black — the relay holds the device, the camera pipeline is not producing. |
+| `REAL PICTURE` | The relay works end to end. If a browser still shows no camera, the problem is browser-side (snap/flatpak confinement, or the browser needs restarting). |
+
+This is worth running *before* anything else below, and worth pasting in full
+into a bug report. `gst-launch-1.0 ... autovideosink` showing a picture proves
+the camera works but says nothing about the loopback, which is the part
+browsers actually read. (issue #65)
+
 ### `camera-relay start` says `libcamerasrc element not found` — but it's installed
 
 If the plugin package is already the newest version and

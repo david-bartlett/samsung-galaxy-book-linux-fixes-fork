@@ -117,5 +117,71 @@ else
     skip "no v4l2loopback device present on this host"
 fi
 
+# ── 5. a failed pipeline must show GStreamer's actual output ─────────────────
+# cmd_start tailed "camera-relay.log" (the on-demand daemon's log) while
+# start_pipeline writes "camera-relay-gst.log", so "ERROR: Relay failed to
+# start. GStreamer output:" was followed by nothing — the reporter in issue #65
+# had no way to see why. Force a failure by seeding the camera-name cache with
+# a camera that does not exist; libcamerasrc then errors out on its own.
+mkdir -p "$TMP/run5"
+echo "no-such-camera-xyz" > "$TMP/run5/camera-relay-camera-name"
+if command -v gst-launch-1.0 &>/dev/null; then
+    out=$(XDG_RUNTIME_DIR="$TMP/run5" "$BASH" "$RELAY" start 2>&1)
+    if grep -q "Relay failed to start" <<<"$out"; then
+        ok "start reports failure for a camera that does not exist"
+        # Anything GStreamer printed proves the right log was read. The banner
+        # must not be followed immediately by the closing rule.
+        if grep -Pzoq 'GStreamer output:\n[─]+\n[─]+\n' <<<"$out"; then
+            bad "GStreamer output section is empty — wrong log file; got:
+$out"
+        else
+            ok "GStreamer's own output is included in the failure report"
+        fi
+    else
+        skip "pipeline did not fail as expected (camera busy?); got: $(head -3 <<<"$out")"
+    fi
+else
+    skip "gst-launch-1.0 not installed"
+fi
+
+# ── 6. doctor tells "nothing is feeding the device" apart from "real picture" ──
+# This is the distinction issue #65 spent six round trips failing to make: a
+# working `gst-launch ... autovideosink` says nothing about the loopback.
+if command -v v4l2-ctl &>/dev/null && dev=$(detect_loopback_device 2>/dev/null); then
+    mkdir -p "$TMP/run6"
+    # Uniform black frames: the device is open and readable, but there is no
+    # picture — doctor must not call this success.
+    if command -v gst-launch-1.0 &>/dev/null; then
+        gst-launch-1.0 videotestsrc pattern=black is-live=true \
+            ! video/x-raw,format=YUY2,width=1920,height=1080 \
+            ! v4l2sink device="$dev" io-mode=mmap sync=false &>/dev/null &
+        black_pid=$!
+        sleep 2
+        out=$(XDG_RUNTIME_DIR="$TMP/run6" "$BASH" "$RELAY" doctor 2>&1)
+        kill "$black_pid" 2>/dev/null || true
+        wait "$black_pid" 2>/dev/null || true
+
+        if grep -q "BLANK FRAMES" <<<"$out"; then
+            ok "doctor calls a uniform stream blank rather than working"
+        else
+            bad "doctor did not flag black frames; got: $(grep -A2 'Frames on' <<<"$out")"
+        fi
+    else
+        skip "gst-launch-1.0 not installed; cannot synthesise a black stream"
+    fi
+
+    # doctor must never abort part-way through — it is a bug-report tool, so a
+    # failing probe has to degrade to a printed line, not a dead script.
+    out=$(XDG_RUNTIME_DIR="$TMP/run6" "$BASH" "$RELAY" doctor 2>&1)
+    rc=$?
+    if [[ $rc -eq 0 ]] && grep -q "Recent logs" <<<"$out"; then
+        ok "doctor runs to completion and exits 0"
+    else
+        bad "doctor exited $rc or stopped early; tail was: $(tail -3 <<<"$out")"
+    fi
+else
+    skip "v4l2-ctl or loopback device unavailable; cannot test doctor frame check"
+fi
+
 echo "  $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]

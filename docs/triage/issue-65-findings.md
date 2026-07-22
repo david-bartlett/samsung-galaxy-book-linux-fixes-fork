@@ -1,10 +1,11 @@
 # Issue #65 — "Webcam doesn't work on Galaxy Book5 Pro 360 960QHA" (@seshf)
 
-**Status:** fix implemented, **unverified on the reporter's hardware**. Reply
-**posted** 2026-07-21 with maintainer sign-off —
+**Status:** first fix landed (`646d668`); **the issue is not closed** — the
+relay now starts but the reporter says the camera still does not appear in the
+browser. Round 2 (below) adds the measurement needed to find out why.
+
+Round 1 reply **posted** 2026-07-21 with maintainer sign-off —
 [comment-5039649723](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/65#issuecomment-5039649723).
-Awaiting the reporter's `dpkg -l gstreamer1.0-tools` output and confirmation
-that the camera appears in Firefox.
 
 Hardware: Galaxy Book5 Pro 360 **960QHA**, IPU7 + **OV02E10**, Kubuntu 26.04,
 kernel 7.1.1-070101-generic, Wayland.
@@ -211,3 +212,148 @@ package.
 > locally by hiding `gst-inspect-1.0`, and there's a regression test covering it —
 > but whether your camera appears in Firefox afterwards is the part only you can
 > confirm. Please report back either way.
+
+---
+
+# Round 2 — the relay starts, the browser still sees nothing
+
+## What changed in the thread
+
+The reporter got past the original error (comment at 22:13 UTC):
+
+```
+$ camera-relay status
+  State:      STOPPED
+  Persistent: ENABLED (on-demand, auto-starts on login)
+  Camera:     \_SB_.LNK0
+  Loopback:   /dev/video0
+
+$ camera-relay start
+[camera-relay] Relay started (PID 190348)
+[camera-relay] Camera available as 'Camera Relay' in apps
+```
+
+> "Now i can start and stop the camera. But is not working in the Browser"
+
+Two later comments add:
+
+- `cam -c1 -C10` captures 10 frames at 40 fps, `bytesused: 8355840`
+  (= 1920×1088×4, so their default libcamera stream is **1920x1088**);
+- `pkg-config --modversion libcamera` → 0.7.0, and the bayer-fix backup at
+  `/var/lib/libcamera-bayer-fix-backup/` holds only an empty `usr/` tree;
+- `groups` → they **are** in `video`.
+
+They still have not answered `dpkg -l gstreamer1.0-tools`, so round 1's
+diagnosis remains unconfirmed. Note `Persistent: ENABLED` while `State: STOPPED`
+— the systemd on-demand unit was enabled but not running, which round 1's
+missing-`gstreamer1.0-tools` theory explains (the unit dies in
+`setup_environment` and `Restart=on-failure` gives up).
+
+## Hypotheses tested and rejected
+
+Both were checked on the maintainer's Book4 (OV02C10, libcamera 0.7.2) rather
+than argued about:
+
+1. **Hardcoded `width=1920,height=1080` in the on-demand pipeline breaks a
+   1088-tall sensor.** `camera-relay:631` and the monitor's `argv` both pin
+   1920x1080, and the reporter's stream is 1920x1088, so a negotiation failure
+   looked likely. **Rejected:** `libcamerasrc ! videoconvert !
+   video/x-raw,format=YUY2,width=1280,height=720` negotiates fine — libcamera
+   reconfigures the stream to whatever size is requested, confirmed by
+   `gst-launch-1.0 -v` reporting `width=(int)1280, height=(int)720`. Asking a
+   1088-native sensor for 1080 therefore works. The hardcoding is still
+   fragile, but it is **not** this bug, so it was left alone.
+2. **v4l2loopback advertises no formats until a writer sets one, so browsers
+   skip it.** **Rejected:** with no writer at all, `v4l2-ctl --list-formats` on
+   the loopback returns a full list (BGR4, RGB4, AR24, …).
+
+## Root cause of round 2: we cannot see what is happening
+
+The thread has now spent six round trips on "the relay starts but the browser
+sees nothing" because **no command in this repo reports whether frames are
+actually reaching the loopback**. `gst-launch-1.0 ... autovideosink` showing a
+picture proves the camera works and says nothing about the device browsers read;
+`lsmod` proves the module is loaded and says nothing about frames.
+
+Worse, when the relay pipeline *does* fail, `cmd_start` printed an empty report.
+Two stacked bugs:
+
+1. it tailed `camera-relay.log` — the **on-demand daemon's** log — while
+   `start_pipeline` writes `camera-relay-gst.log`;
+2. even with the path corrected, `tail -20 "$gst_log" 2>/dev/null >&2` applies
+   redirections left to right: fd 2 goes to `/dev/null`, then `>&2` duplicates
+   *that* onto fd 1, so tail's output was discarded.
+
+So the user saw:
+
+```
+ERROR: Relay failed to start. GStreamer output:
+───────────────────────────────────────────────
+───────────────────────────────────────────────
+```
+
+Both bugs had to be fixed for the block to print anything; fixing only the path
+(the obvious one) still yields an empty banner. Caught by writing the test
+first, not by reading the code.
+
+## Fix
+
+**`camera-relay/camera-relay`**
+
+- `cmd_doctor()` — new `camera-relay doctor` command. One paste-able report:
+  system/kernel/session, `video` group membership, tool presence, libcamera
+  version + camera name + plugin path + whether `libcamerasrc` loads, module
+  and device state with the negotiated format, relay/service/monitor-binary
+  state, browser packaging (snap and flatpak confinement), and recent GStreamer
+  and journal logs.
+  The decisive section is **Frames on the loopback**: it streams 60 frames,
+  keeps the last 256 KB (skipping the monitor's black start-up placeholders)
+  and classifies the result as `NO FRAMES` / `BLANK FRAMES` / `REAL PICTURE`
+  by counting distinct byte values. That single line separates "our relay is
+  broken" from "your browser cannot see a working device".
+- `cmd_start()` — corrected the log path and the redirection order so a failed
+  pipeline actually shows GStreamer's error.
+
+Two bugs in `cmd_doctor` were themselves caught by running it, not reading it:
+`lsmod | grep -q v4l2loopback` reported the module as absent (grep exits on the
+first match, SIGPIPEs `lsmod`, and `set -o pipefail` fails the whole test — it
+now reads `/proc/modules` directly), and `systemctl is-active ... || echo
+inactive` printed `inactive` twice, since `is-active` prints its answer *and*
+exits non-zero.
+
+**Not changed:** the hardcoded 1920x1080 (see rejected hypothesis 1) and the
+same `find | grep -q .` pipefail pattern in `detect_ipa_path()`, which is
+pre-existing and unrelated to this issue.
+
+## Verification
+
+`camera-relay/tests/test-gst-tools-check.sh` grew from 7 to 11 assertions.
+The new ones:
+
+5. a pipeline failure (forced by seeding the camera-name cache with a
+   non-existent camera) reports the failure **and** includes GStreamer's own
+   output — asserted by matching on the empty-banner shape, so it fails if
+   either of the two stacked bugs is present;
+6. `doctor` classifies a synthetic all-black stream (`videotestsrc
+   pattern=black ! v4l2sink`) as `BLANK FRAMES` rather than success, and runs
+   to completion with exit 0.
+
+Results — **11/11 pass** on the fixed code; against `HEAD:camera-relay/camera-relay`
+the three new assertions fail. `doctor` was additionally run by hand in all
+three frame states on the maintainer's Book4: relay stopped → `NO FRAMES`,
+synthetic black stream → `BLANK FRAMES`, relay running → `REAL PICTURE — 262144
+bytes captured, 122 distinct byte values`.
+
+**Not verified:** still nothing on a 960QHA. Round 2 does not claim to fix the
+reporter's camera — it makes the next report diagnostic instead of anecdotal.
+
+## Round 2 reply posted to #65 (2026-07-21)
+
+[comment-5040240218](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/65#issuecomment-5040240218).
+Confirms the camera and permissions are fine and the backup directory is a
+red herring, then asks for the one measurement nobody has taken: a live frame
+off `/dev/video0` with its distinct-byte-value count, plus
+`camera-relay status` after start, the GStreamer log, `systemctl --user status`,
+and `snap list` (snap-confined browsers would explain all three failing at
+once). `doctor` itself is not on `main` yet, so the reply spells out the raw
+`v4l2-ctl` equivalent instead of pointing at the new command.
