@@ -357,3 +357,64 @@ off `/dev/video0` with its distinct-byte-value count, plus
 and `snap list` (snap-confined browsers would explain all three failing at
 once). `doctor` itself is not on `main` yet, so the reply spells out the raw
 `v4l2-ctl` equivalent instead of pointing at the new command.
+
+---
+
+# Round 3 — `STREAMING` with a loopback refcount of 0
+
+Reporter comment 2026-07-21 23:51 (written before they saw the round 2
+questions), plus their guess that stale device nodes are to blame:
+
+> "The many /dev/video are from older test installs. I don't known how i can
+> remove the /dev/video that don't exists physical. Maybe this is the problem
+> why that don't work in the Browser and VCL."
+
+```
+$ camera-relay status
+  State:      STREAMING (PID 207442)
+  Loopback:   /dev/video0
+
+$ ls -l /dev/video*      → video0 … video32   (33 nodes)
+$ lsmod | grep v4l2loopback
+v4l2loopback           61440  0
+```
+
+## Their theory is wrong, and the paste contains the real anomaly
+
+**The 33 nodes are normal.** Checked against the maintainer's working Book4:
+it has **49** — `video0: Camera Relay` plus `video1…video48: Intel IPU6 ISYS
+Capture 0…47`. IPU6/IPU7 ISYS registers one node per virtual stream; they are
+not leftovers, cannot be removed, and are not the problem. Their layout matches
+a healthy machine, `video0` included: v4l2loopback loads before the IPU driver
+and takes the first minor.
+
+**The anomaly is `v4l2loopback 61440 0` while `status` says STREAMING.** The
+third column is the module reference count. Measured on Book4:
+
+| Relay state | refcount | holder |
+| --- | --- | --- |
+| stopped | 0 | — |
+| streaming | 1 | `gst-launch-1.0` (`fuser -v /dev/video0`) |
+
+So on a working system a streaming relay holds the device and the count is 1.
+The reporter's count is **0 while the relay claims to be streaming**: no process
+has the loopback open, therefore nothing has written a frame to it, therefore
+browsers correctly report no camera. Whatever PID 207442 is, its pipeline is not
+attached to `/dev/video0`.
+
+This is possible because `is_running()` only does `kill -0` on the PID from
+`$PID_FILE`, and `cmd_status` prints `STREAMING` from `$STATE_CACHE`. Neither
+looks at the device. A pipeline that exits, or never opens the sink, leaves both
+saying everything is fine.
+
+## Fix
+
+`cmd_doctor()` now prints the module reference count and, when it is 0, says
+plainly that nothing has the device open and that a `STREAMING` line below it is
+therefore false. One `awk` on `/proc/modules`; no new dependency. Verified in
+both states on Book4 (`refcount 0` + warning when stopped, `refcount 1` and no
+warning when streaming). Suite still 11/11.
+
+Still open: *why* the pipeline detaches on the 960QHA. `doctor`'s frame check
+plus the GStreamer log it prints should answer that in one paste — the reporter
+has not run it yet.

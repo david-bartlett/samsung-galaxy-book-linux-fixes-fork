@@ -815,8 +815,19 @@ cmd_doctor() {
 
     echo
     echo "── v4l2loopback ──"
+    # The module's reference count is the cheapest proof that something really
+    # has the loopback open. `status` only checks that the relay's PID is alive,
+    # so it can report STREAMING while no process holds the device and no frame
+    # has ever been written — which is exactly the state issue #65 reported.
+    local refcount=""
     if grep -q '^v4l2loopback ' /proc/modules 2>/dev/null; then
-        echo "  module: loaded"
+        refcount=$(awk '$1 == "v4l2loopback" { print $3 }' /proc/modules 2>/dev/null)
+        echo "  module: loaded (refcount ${refcount:-?})"
+        if [[ "$refcount" == "0" ]]; then
+            echo "  → refcount 0: NO process has the loopback open, so nothing can be"
+            echo "    writing frames to it. If the relay says STREAMING below, its"
+            echo "    pipeline is not attached to this device."
+        fi
     else
         echo "  module: NOT LOADED"
     fi
