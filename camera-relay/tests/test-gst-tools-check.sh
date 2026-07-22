@@ -183,5 +183,40 @@ else
     skip "v4l2-ctl or loopback device unavailable; cannot test doctor frame check"
 fi
 
+# ── 7. a live PID that is not relaying must not count as "already running" ────
+# Issue #65's end state: gst-launch-1.0 stayed alive after letting go of the
+# loopback, so is_running() said yes. status printed STREAMING, and the
+# on-demand service exited 0 with "Already running" — which Restart=on-failure
+# reads as success, so systemd never retried. Only a reboot (wiping
+# XDG_RUNTIME_DIR) cleared it. A plain `sleep` reproduces the state exactly:
+# a live PID that holds nothing.
+if [[ -e /proc/modules ]] && ! grep -q '^v4l2loopback .* [1-9]' /proc/modules; then
+    mkdir -p "$TMP/run7"
+    sleep 60 &
+    fake_pid=$!
+    echo "$fake_pid" > "$TMP/run7/camera-relay.pid"
+    echo "streaming" > "$TMP/run7/camera-relay-state"
+
+    out=$(timeout 20 env XDG_RUNTIME_DIR="$TMP/run7" \
+          "$BASH" "$RELAY" start --on-demand 2>&1 | head -8) || true
+    kill "$fake_pid" 2>/dev/null || true
+    wait "$fake_pid" 2>/dev/null || true
+
+    if grep -q "Already running" <<<"$out"; then
+        bad "a live non-relaying PID is still treated as a working relay; got:
+$out"
+    else
+        ok "a live PID that holds no loopback is not treated as a working relay"
+    fi
+    if grep -q "Clearing stale relay state" <<<"$out"; then
+        ok "stale relay state is cleared instead of silently no-opping"
+    else
+        bad "stale state was not cleared; got:
+$out"
+    fi
+else
+    skip "a real relay currently holds the loopback; cannot test the stale-PID path"
+fi
+
 echo "  $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]

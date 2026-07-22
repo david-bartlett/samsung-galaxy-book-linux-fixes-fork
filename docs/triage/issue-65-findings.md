@@ -418,3 +418,62 @@ warning when streaming). Suite still 11/11.
 Still open: *why* the pipeline detaches on the 960QHA. `doctor`'s frame check
 plus the GStreamer log it prints should answer that in one paste — the reporter
 has not run it yet.
+
+---
+
+# Round 4 — RESOLVED on the reporter's hardware
+
+Reporter, 2026-07-22 00:07 (before reading rounds 2–3):
+
+> "I do not have make any updates, i see your comments right now. But i have
+> reboot my System an now the camera works in firefox."
+
+Firefox reports `Camera Relay (V4L2)`, 1920x1080, 21 fps. **Issue #65's symptom
+is gone**, and the round 1 diagnosis holds: the missing `gstreamer1.0-tools` was
+the root cause. They installed it, but the camera did not come back until a
+reboot — and the reason for that is a second bug, now found and fixed.
+
+## Why a reboot was required
+
+`is_running()` treats "the PID in `$PID_FILE` is alive" as "the relay is
+working". Nothing checks the device. So this state is reachable and sticky:
+
+1. a relay start leaves `$PID_FILE` pointing at a `gst-launch-1.0` that later
+   lets go of the loopback but keeps running (their `v4l2loopback 61440 0`
+   alongside `State: STREAMING (PID 207442)`);
+2. `cmd_status` prints `STREAMING` from `$STATE_CACHE` — no contradiction visible;
+3. the on-demand systemd unit starts, `is_running()` returns true, it prints
+   `Already running` and **exits 0**. `Restart=on-failure` reads a clean exit as
+   success, so systemd never retries;
+4. nothing recovers. `$PID_FILE` lives in `$XDG_RUNTIME_DIR`, which is wiped on
+   reboot — which is why only a reboot fixed it.
+
+Reproduced exactly on Book4 by pointing `$PID_FILE` at a plain `sleep`:
+`camera-relay start --on-demand` printed `Already running (PID …)` and exited 0,
+and `status` reported `STREAMING` for a process that was doing nothing.
+
+## Fix
+
+- `relay_holds_loopback()` — reads the v4l2loopback refcount from
+  `/proc/modules`. Both relay modes hold the device for their whole lifetime
+  (the always-on pipeline via `v4l2sink`, the on-demand monitor via the writer
+  fd it never releases), so a refcount of 0 proves nothing is attached.
+- `already_running_healthy()` — replaces the bare `is_running` guard in both
+  `cmd_start` and `cmd_start_on_demand`. A live-but-detached relay is now
+  reported and cleared via `cmd_stop` instead of being trusted, so the service
+  starts fresh rather than no-opping. A healthy relay is still recognised and
+  left alone.
+
+Measured on Book4: refcount 0 stopped, 1 while streaming, holder confirmed as
+`gst-launch-1.0` by `fuser -v /dev/video0`.
+
+## Verification
+
+Suite now **13/13**. The two new assertions (a live non-relaying PID must not
+count as running; stale state must be cleared, not silently accepted) fail
+against the previous commit. A genuinely running relay is still correctly
+reported as `Already running`.
+
+**Verified on the reporter's hardware:** the original symptom only — they
+confirm the camera works in Firefox. The stale-PID fix is verified on Book4 and
+prevents the reboot they needed; it has not been exercised on a 960QHA.

@@ -215,6 +215,31 @@ is_persistent() {
     systemctl --user is-enabled "$SERVICE_NAME" &>/dev/null 2>&1
 }
 
+# Both relay modes keep the loopback open for as long as they run: the always-on
+# pipeline through v4l2sink, the on-demand monitor through the writer fd it
+# never releases. So a v4l2loopback reference count of zero means nothing is
+# attached to the device, whatever our PID file says.
+relay_holds_loopback() {
+    local refcount
+    refcount=$(awk '$1 == "v4l2loopback" { print $3 }' /proc/modules 2>/dev/null)
+    [[ -n "$refcount" && "$refcount" != "0" ]]
+}
+
+# "The PID is alive" is not the same as "the relay is working". In issue #65 a
+# gst-launch-1.0 stayed alive after letting go of the loopback, so is_running()
+# said yes, status printed STREAMING, and — worst of all — the on-demand service
+# no-opped with "Already running" and exited 0, which Restart=on-failure treats
+# as success. systemd therefore never retried and the camera stayed dead until a
+# reboot wiped XDG_RUNTIME_DIR. Detect that and clear it instead of trusting it.
+already_running_healthy() {
+    is_running || return 1
+    relay_holds_loopback && return 0
+    warn "PID $(cat "$PID_FILE" 2>/dev/null) is alive but no process holds the v4l2loopback device"
+    warn "Clearing stale relay state and starting fresh"
+    cmd_stop >/dev/null 2>&1 || true
+    return 1
+}
+
 detect_gst_plugin_path() {
     local dir
     for dir in /usr/local/lib/x86_64-linux-gnu/gstreamer-1.0 \
@@ -514,7 +539,7 @@ cmd_start() {
     local foreground=false
     [[ "$mode" == "--foreground" ]] && foreground=true
 
-    if is_running; then
+    if already_running_healthy; then
         local pid
         pid=$(cat "$PID_FILE")
         info "Already running (PID $pid)"
@@ -584,7 +609,7 @@ cmd_start() {
 }
 
 cmd_start_on_demand() {
-    if is_running; then
+    if already_running_healthy; then
         local pid
         pid=$(cat "$PID_FILE")
         info "Already running (PID $pid)"
