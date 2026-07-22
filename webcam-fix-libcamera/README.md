@@ -159,7 +159,18 @@ With `exclusive_caps=0` (the default), browsers work best using V4L2 directly th
 | **Cheese** | Crashes | Use standalone fix: `cd ../camera-relay && ./cheese-fix.sh` |
 | **GNOME Camera** | May crash | Workaround: `LIBGL_ALWAYS_SOFTWARE=1 snapshot` |
 
-**Note:** The PipeWire camera flag (`chrome://flags/#enable-webrtc-pipewire-camera`) is **not recommended** — community testing found it can prevent Chromium browsers from seeing the camera, and Edge doesn't support it at all. Browsers work reliably through the V4L2 camera relay without this flag.
+**Note on `chrome://flags/#enable-webrtc-pipewire-camera`:** whether you want this
+depends on your libcamera version, so check `pkg-config --modversion libcamera`
+first.
+
+- **libcamera 0.2.0 (Ubuntu 24.04 Noble / Zorin): leave it Disabled.** That
+  libcamera has no IPU6 support, so the flag makes Chrome take a broken path and
+  bypass the working V4L2 relay — see the troubleshooting section below.
+- **libcamera 0.7+: safe, and sometimes required.** If Firefox sees the camera
+  but Brave or Chromium don't, enable it and fully restart the browser
+  ([issue #65](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/65)).
+
+Edge doesn't support the flag at all and works through the V4L2 relay only.
 
 Quick test:
 
@@ -317,7 +328,7 @@ camera-relay status
 camera-relay enable-persistent --yes  # if not enabled
 ```
 
-**Keep `chrome://flags/#enable-webrtc-pipewire-camera` DISABLED.** On Ubuntu/Zorin (Noble) the PipeWire camera path goes through the system libcamera 0.2.0, which has no IPU6 support — enabling the flag makes Chrome use that broken path and bypass the working V4L2 relay entirely (the camera will *not* be found).
+**On Ubuntu/Zorin (Noble), keep `chrome://flags/#enable-webrtc-pipewire-camera` DISABLED.** There the PipeWire camera path goes through the system libcamera 0.2.0, which has no IPU6 support — enabling the flag makes Chrome use that broken path and bypass the working V4L2 relay entirely (the camera will *not* be found). This is specific to that libcamera version: run `pkg-config --modversion libcamera`, and if it reports **0.7 or newer** the flag is safe, and on some setups Chromium and Brave need it (issue #65).
 
 If Chrome shows "camera not found" even with the relay streaming and the flag off: Chromium enumerates V4L2 cameras through **udev** and only lists devices whose `ID_V4L_CAPABILITIES` property contains `:capture:`. `v4l_id` tags the loopback once at device creation — before any capture format is negotiated — so the property can come up without `:capture:` and Chrome silently filters the device out (libcamera/PipeWire apps like Cheese and Firefox are unaffected, which is why they still work). The installer ships a udev rule (`/etc/udev/rules.d/70-camera-relay-capabilities.rules`) that forces the capture capability for the relay node. Check it with:
 

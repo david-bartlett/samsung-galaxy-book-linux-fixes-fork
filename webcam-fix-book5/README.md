@@ -254,7 +254,38 @@ If Chrome still shows "waiting for your permission" without a prompt, try:
 2. Clear site permissions for the page you're testing
 3. Try an Incognito window (to rule out extension conflicts)
 
-**Note:** The PipeWire camera flag (`chrome://flags/#enable-webrtc-pipewire-camera`) is **not recommended** — community testing found it can prevent Chromium browsers from seeing the camera, and Edge doesn't support it at all. Only try it as a last resort, and disable it if it causes problems.
+### Firefox sees the camera but Brave / Chromium don't
+
+Enable the PipeWire camera flag in the Chromium-family browser:
+
+```
+chrome://flags/#enable-webrtc-pipewire-camera   →  Enabled
+```
+
+Then fully quit and reopen the browser — Chromium caches its device list at
+startup, so a page reload is not enough.
+
+Why the two browsers differ: the relay node is created with `exclusive_caps=0`,
+so it advertises **both** `Video Capture` and `Video Output`
+(`v4l2-ctl -d /dev/videoN --info` shows both under `Device Caps`). Firefox
+accepts that and reads the device directly over V4L2; Chromium-family browsers
+are stricter about it, and browsers installed as snaps or flatpaks are sandboxed
+away from `/dev/video*` entirely. The flag routes them through PipeWire instead,
+where WirePlumber presents the relay as an ordinary camera. Confirmed on a
+960QHA / Kubuntu 26.04 in [issue #65](https://github.com/Andycodeman/samsung-galaxy-book-linux-fixes/issues/65).
+
+**Two exceptions where the flag is the wrong move:**
+
+- **Ubuntu 24.04 (Noble) / Zorin**, where the system libcamera is **0.2.0** and
+  has no IPU6/IPU7 support. There the flag makes Chrome take that broken path
+  and bypass the working V4L2 relay, so the camera is *not* found. Check with
+  `pkg-config --modversion libcamera` — at **0.7 or newer the flag is safe**,
+  and that is where the older "keep it disabled" advice comes from.
+- **Edge**, which doesn't support the flag at all. It works through the V4L2
+  relay only.
+
+If enabling it makes things worse, set it back to Disabled — it is a per-browser
+setting and changes nothing system-wide.
 
 ### VLC / Zoom / OBS don't see the camera
 

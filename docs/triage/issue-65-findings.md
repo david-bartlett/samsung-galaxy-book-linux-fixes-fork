@@ -477,3 +477,83 @@ reported as `Already running`.
 **Verified on the reporter's hardware:** the original symptom only — they
 confirm the camera works in Firefox. The stale-PID fix is verified on Book4 and
 prevents the reboot they needed; it has not been exercised on a 960QHA.
+
+---
+
+# Round 5 — working, but Chromium-family browsers need the PipeWire flag
+
+Reporter, 2026-07-22: camera confirmed working in Firefox and VLC (screenshot of
+a real picture posted), then after installing v0.3.56:
+
+> "The camera in brave and cromium works only when i enable this"
+
+Both screenshots show the same setting, in Brave and in Chromium:
+
+```
+chrome://flags/#enable-webrtc-pipewire-camera   →  Enabled
+```
+
+Also disclosed, from before their reboot:
+
+```
+sudo modprobe v4l2loopback video_nr=0 card_label="Virtuelle_Webcam" exclusive_caps=1
+```
+
+— they had manually loaded v4l2loopback with **`exclusive_caps=1`** and a
+non-default card label, both of which conflict with
+`99-camera-relay-loopback.conf` (`exclusive_caps=0`, `card_label="Camera Relay"`).
+That is a second reason the reboot changed things: it reloaded the module from
+our modprobe.d config. Worth remembering when a report includes hand-run
+`modprobe` lines.
+
+## Our docs said the opposite of what they needed
+
+Three places told users to keep that flag off:
+
+- `webcam-fix-book5/README.md` — "**not recommended** … only try it as a last resort"
+- `webcam-fix-libcamera/README.md` — "**not recommended** … browsers work reliably without this flag"
+- `webcam-fix-libcamera/README.md` (troubleshooting) — "**Keep … DISABLED**"
+
+plus the same line printed by both installers. Following that advice would have
+left this reporter with no camera in Brave or Chromium.
+
+The "keep it disabled" rule is real but **version-specific**, and only one of the
+three places said so: on Ubuntu 24.04 (Noble) / Zorin the system libcamera is
+**0.2.0**, which has no IPU6 support, so the flag routes Chrome down a broken
+path and bypasses the working V4L2 relay. The reporter is on libcamera **0.7.0**,
+where that reason does not apply.
+
+## Why Firefox works without the flag and Chromium does not
+
+The relay node is created with `exclusive_caps=0`, so it advertises **both**
+capture and output. Verified on Book4:
+
+```
+$ v4l2-ctl -d /dev/video0 --info
+Device Caps      : 0x05200003
+    Video Capture
+    Video Output
+    ...
+```
+
+Firefox accepts that and reads the device directly over V4L2. Chromium-family
+browsers are stricter, and snap/flatpak builds are sandboxed away from
+`/dev/video*` altogether; the flag routes them through PipeWire instead, where
+WirePlumber presents the relay as an ordinary camera. The dual-caps fact is
+measured; that it is *the* reason Chromium skips the node is a strong inference,
+not something confirmed from Chromium's side, and the docs are worded to match.
+
+## Fix (documentation + one diagnostic line)
+
+- `webcam-fix-book5/README.md` — replaced the blanket "not recommended" note
+  with a symptom-first section: *Firefox sees the camera but Brave / Chromium
+  don't* → enable the flag, fully restart the browser, plus the two exceptions
+  (libcamera 0.2.0, and Edge which has no such flag).
+- `webcam-fix-libcamera/README.md` — both mentions now key the advice off
+  `pkg-config --modversion libcamera` rather than stating a blanket rule.
+- both installers' post-install hints rewritten the same way.
+- `camera-relay doctor` — when a Chromium-family browser is installed, the
+  Browsers section now names the flag and its version caveat.
+
+No code path changed; `bash -n` clean on all three scripts and the suite is
+still 13/13.

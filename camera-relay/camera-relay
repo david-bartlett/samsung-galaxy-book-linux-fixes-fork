@@ -922,15 +922,25 @@ cmd_doctor() {
 
     echo
     echo "── Browsers ──"
-    local b bpath
+    local b bpath chromium_family=false
     for b in firefox chromium chromium-browser brave-browser google-chrome; do
         bpath=$(command -v "$b" 2>/dev/null) || continue
+        [[ "$b" != firefox ]] && chromium_family=true
         if command -v snap &>/dev/null && snap list "$b" &>/dev/null; then
             echo "  $b: snap — confined; needs 'snap connect $b:camera'"
         else
             echo "  $b: $bpath"
         fi
     done
+    if $chromium_family; then
+        # The relay node carries both CAPTURE and OUTPUT caps under
+        # exclusive_caps=0; Firefox accepts that and reads it over V4L2, while
+        # Chromium-family browsers often will not (issue #65).
+        echo "  If Firefox sees the camera but a Chromium-family browser does not:"
+        echo "    chrome://flags/#enable-webrtc-pipewire-camera -> Enabled, then fully"
+        echo "    restart the browser. Safe on libcamera 0.7+; leave it OFF on"
+        echo "    Ubuntu 24.04/Zorin (libcamera 0.2.0 has no IPU6 support)."
+    fi
     if command -v flatpak &>/dev/null; then
         { flatpak list --app --columns=application 2>/dev/null \
             | grep -iE 'firefox|chrom|brave' | sed 's/^/  flatpak: /; s/$/ — needs --device=all/'; } || true
